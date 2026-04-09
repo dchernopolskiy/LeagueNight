@@ -461,7 +461,7 @@ async function seed() {
     const leagueRes = await c.query(`
       INSERT INTO leagues (organizer_id, name, slug, sport, season_name, season_start, season_end, settings, timezone, is_public)
       VALUES ($1, $2, $3, 'Volleyball', 'Spring 2026', '2026-04-06', '2026-06-29',
-        '{"scoring_mode": "sets", "sets_to_win": 2}', 'America/Los_Angeles', false)
+        '{"scoring_mode": "sets", "sets_to_win": 2}', 'America/Los_Angeles', true)
       RETURNING id
     `, [ORGANIZER_ID, league.name, slug]);
     const leagueId = leagueRes.rows[0].id;
@@ -526,7 +526,7 @@ async function seed() {
     const leagueRes = await c.query(`
       INSERT INTO leagues (organizer_id, name, slug, sport, season_name, season_start, season_end, settings, timezone, is_public)
       VALUES ($1, $2, $3, 'Basketball', 'Spring 2026', '2026-04-06', '2026-06-29',
-        '{"scoring_mode": "game"}', 'America/Los_Angeles', false)
+        '{"scoring_mode": "game"}', 'America/Los_Angeles', true)
       RETURNING id
     `, [ORGANIZER_ID, league.name, slug]);
     const leagueId = leagueRes.rows[0].id;
@@ -687,7 +687,7 @@ async function seed() {
     const leagueRes = await c.query(`
       INSERT INTO leagues (organizer_id, name, slug, sport, season_name, season_start, season_end, settings, timezone, is_public)
       VALUES ($1, $2, $3, 'Pickleball', 'Spring 2026', '2026-04-06', '2026-06-29',
-        '{"scoring_mode": "game"}', 'America/Los_Angeles', false)
+        '{"scoring_mode": "game"}', 'America/Los_Angeles', true)
       RETURNING id
     `, [ORGANIZER_ID, league.name, slug]);
     const leagueId = leagueRes.rows[0].id;
