@@ -399,11 +399,9 @@ export function LocationsManager({
     <div className="space-y-4">
       {/* Add Location Button */}
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogTrigger>
-          <Button size="sm">
-            <Plus className="h-4 w-4 mr-1" />
-            Add Location
-          </Button>
+        <DialogTrigger render={<Button size="sm" />}>
+          <Plus className="h-4 w-4 mr-1" />
+          Add Location
         </DialogTrigger>
         <DialogContent>
           <DialogHeader>
@@ -543,26 +541,35 @@ export function LocationsManager({
                     </p>
                     {locUnavail.length > 0 ? (
                       <div className="flex flex-wrap gap-1.5">
-                        {locUnavail.map((u) => (
-                          <Badge
-                            key={u.id}
-                            variant="secondary"
-                            className="gap-1 text-xs"
-                          >
-                            {u.unavailable_date}
-                            {u.reason && (
-                              <span className="text-muted-foreground">
-                                ({u.reason})
-                              </span>
-                            )}
-                            <button
-                              onClick={() => removeUnavailability(u.id)}
-                              className="ml-0.5 hover:text-destructive"
+                        {locUnavail.map((u) => {
+                          const hasConflictsForDate = locConflicts.some(
+                            (c) => format(new Date(c.scheduled_at), "yyyy-MM-dd") === u.unavailable_date
+                          );
+                          return (
+                            <Badge
+                              key={u.id}
+                              variant="secondary"
+                              className={`gap-1 text-xs ${hasConflictsForDate ? "border-amber-300 bg-amber-100 text-amber-800 cursor-pointer" : ""}`}
+                              onClick={hasConflictsForDate ? () => {
+                                document.getElementById(`conflicts-${loc.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+                              } : undefined}
                             >
-                              <X className="h-3 w-3" />
-                            </button>
-                          </Badge>
-                        ))}
+                              {hasConflictsForDate && <AlertTriangle className="h-3 w-3" />}
+                              {u.unavailable_date}
+                              {u.reason && (
+                                <span className="text-muted-foreground">
+                                  ({u.reason})
+                                </span>
+                              )}
+                              <button
+                                onClick={(e) => { e.stopPropagation(); removeUnavailability(u.id); }}
+                                className="ml-0.5 hover:text-destructive"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </Badge>
+                          );
+                        })}
                       </div>
                     ) : (
                       <p className="text-xs text-muted-foreground">None</p>
@@ -608,7 +615,7 @@ export function LocationsManager({
 
                   {/* Conflict alerts */}
                   {locConflicts.length > 0 && (
-                    <div className="space-y-2 pt-2 border-t border-amber-200 bg-amber-50/50 -mx-6 px-6 py-3 rounded-b-lg">
+                    <div id={`conflicts-${loc.id}`} className="space-y-2 pt-2 border-t border-amber-200 bg-amber-50/50 -mx-6 px-6 py-3 rounded-b-lg">
                       <p className="text-xs font-medium flex items-center gap-1 text-amber-700">
                         <AlertTriangle className="h-3.5 w-3.5" />
                         {locConflicts.length} game{locConflicts.length !== 1 ? "s" : ""} affected by unavailability

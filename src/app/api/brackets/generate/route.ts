@@ -11,7 +11,15 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json();
-  const { leagueId, divisionId, numTeams, format, seedBy, name } = body;
+  const {
+    leagueId,
+    divisionId,
+    numTeams,
+    format,
+    seedBy,
+    name,
+    teamsPerBracket,
+  } = body;
 
   if (!leagueId || !numTeams || !format || !seedBy || !name) {
     return NextResponse.json(
@@ -48,7 +56,6 @@ export async function POST(request: NextRequest) {
     .eq("league_id", leagueId)
     .order("rank");
 
-  // Get teams, optionally filtered by division
   let teamsQuery = supabase
     .from("teams")
     .select("*")
@@ -76,121 +83,139 @@ export async function POST(request: NextRequest) {
   if (seedBy === "points") {
     standings.sort((a, b) => b.points_for - a.points_for);
   }
-  // "record" uses the default rank order which is already sorted
 
-  // Use available teams, pad with byes if fewer than requested
   const effectiveNumTeams = Math.min(standings.length, numTeams);
+  const seededStandings = standings.slice(0, effectiveNumTeams);
 
-  // Generate bracket structure
-  const { slots, totalRounds } = generateBracket({
-    standings,
-    teams,
-    numTeams: effectiveNumTeams || numTeams,
-    format,
-  });
+  // Split into multiple brackets if teamsPerBracket is set
+  const perBracket = teamsPerBracket || effectiveNumTeams;
+  const bracketCount = Math.ceil(effectiveNumTeams / perBracket);
 
-  // Create bracket record
-  const { data: bracket, error: bracketError } = await supabase
-    .from("brackets")
-    .insert({
-      league_id: leagueId,
-      division_id: divisionId || null,
-      name,
+  const allBrackets = [];
+  const allSlots = [];
+  const allGames = [];
+
+  for (let bi = 0; bi < bracketCount; bi++) {
+    const start = bi * perBracket;
+    const end = Math.min(start + perBracket, effectiveNumTeams);
+    const bracketStandings = seededStandings.slice(start, end);
+    const bracketTeamIds = new Set(bracketStandings.map((s) => s.team_id));
+    const bracketTeams = teams.filter((t) => bracketTeamIds.has(t.id));
+
+    const bracketName =
+      bracketCount === 1
+        ? name
+        : `${name} — ${bracketCount <= 3 ? ["Top", "Middle", "Bottom"][bi] || `Group ${bi + 1}` : `Group ${bi + 1}`} (Teams ${start + 1}-${end})`;
+
+    // Generate bracket structure
+    const { slots, totalRounds } = generateBracket({
+      standings: bracketStandings,
+      teams: bracketTeams,
+      numTeams: bracketStandings.length,
       format,
-      num_teams: numTeams,
-      seed_by: seedBy,
-    })
-    .select()
-    .single();
+    });
 
-  if (bracketError || !bracket) {
-    return NextResponse.json(
-      { error: bracketError?.message || "Failed to create bracket" },
-      { status: 500 }
-    );
-  }
-
-  // Create playoff games for first round matchups (where both teams are assigned)
-  const firstRoundSlots = slots.filter((s) => s.round === 1 && s.team_id);
-  const gameInserts: {
-    league_id: string;
-    home_team_id: string;
-    away_team_id: string;
-    scheduled_at: string;
-    status: string;
-    is_playoff: boolean;
-  }[] = [];
-
-  // Group first round slots into matchup pairs (consecutive positions)
-  for (let i = 0; i < firstRoundSlots.length; i += 2) {
-    const topSlot = firstRoundSlots[i];
-    const bottomSlot = firstRoundSlots[i + 1];
-
-    if (topSlot?.team_id && bottomSlot?.team_id) {
-      gameInserts.push({
+    // Create bracket record
+    const { data: bracket, error: bracketError } = await supabase
+      .from("brackets")
+      .insert({
         league_id: leagueId,
-        home_team_id: topSlot.team_id,
-        away_team_id: bottomSlot.team_id,
-        scheduled_at: new Date().toISOString(), // placeholder — organizer schedules later
-        status: "scheduled",
-        is_playoff: true,
-      });
-    }
-  }
+        division_id: divisionId || null,
+        name: bracketName,
+        format,
+        num_teams: bracketStandings.length,
+        seed_by: seedBy,
+      })
+      .select()
+      .single();
 
-  let insertedGames: { id: string }[] = [];
-  if (gameInserts.length > 0) {
-    const { data: games, error: gamesError } = await supabase
-      .from("games")
-      .insert(gameInserts)
-      .select("id");
-
-    if (gamesError) {
-      // Rollback bracket on failure
-      await supabase.from("brackets").delete().eq("id", bracket.id);
+    if (bracketError || !bracket) {
       return NextResponse.json(
-        { error: gamesError.message },
+        { error: bracketError?.message || "Failed to create bracket" },
         { status: 500 }
       );
     }
 
-    insertedGames = games || [];
-  }
+    // Create playoff games for first round matchups
+    const firstRoundSlots = slots.filter((s) => s.round === 1 && s.team_id);
+    const gameInserts: {
+      league_id: string;
+      home_team_id: string;
+      away_team_id: string;
+      scheduled_at: string;
+      status: string;
+      is_playoff: boolean;
+    }[] = [];
 
-  // Assign game IDs to first round slot pairs
-  let gameIdx = 0;
-  const slotsWithGames = slots.map((slot) => {
-    if (slot.round === 1 && slot.team_id) {
-      // Every pair of slots shares a game
-      const pairIndex = Math.floor(
-        firstRoundSlots.indexOf(slot) / 2
-      );
-      return {
-        ...slot,
-        bracket_id: bracket.id,
-        game_id: insertedGames[pairIndex]?.id ?? null,
-      };
+    for (let i = 0; i < firstRoundSlots.length; i += 2) {
+      const topSlot = firstRoundSlots[i];
+      const bottomSlot = firstRoundSlots[i + 1];
+
+      if (topSlot?.team_id && bottomSlot?.team_id) {
+        gameInserts.push({
+          league_id: leagueId,
+          home_team_id: topSlot.team_id,
+          away_team_id: bottomSlot.team_id,
+          scheduled_at: new Date().toISOString(),
+          status: "scheduled",
+          is_playoff: true,
+        });
+      }
     }
-    return { ...slot, bracket_id: bracket.id };
-  });
 
-  // Insert bracket slots
-  const { data: insertedSlots, error: slotsError } = await supabase
-    .from("bracket_slots")
-    .insert(slotsWithGames)
-    .select();
+    let insertedGames: { id: string }[] = [];
+    if (gameInserts.length > 0) {
+      const { data: games, error: gamesError } = await supabase
+        .from("games")
+        .insert(gameInserts)
+        .select("id");
 
-  if (slotsError) {
-    return NextResponse.json(
-      { error: slotsError.message },
-      { status: 500 }
-    );
+      if (gamesError) {
+        await supabase.from("brackets").delete().eq("id", bracket.id);
+        return NextResponse.json(
+          { error: gamesError.message },
+          { status: 500 }
+        );
+      }
+
+      insertedGames = games || [];
+    }
+
+    // Assign game IDs to first round slot pairs
+    const slotsWithGames = slots.map((slot) => {
+      if (slot.round === 1 && slot.team_id) {
+        const pairIndex = Math.floor(firstRoundSlots.indexOf(slot) / 2);
+        return {
+          ...slot,
+          bracket_id: bracket.id,
+          game_id: insertedGames[pairIndex]?.id ?? null,
+        };
+      }
+      return { ...slot, bracket_id: bracket.id };
+    });
+
+    // Insert bracket slots
+    const { data: insertedSlots, error: slotsError } = await supabase
+      .from("bracket_slots")
+      .insert(slotsWithGames)
+      .select();
+
+    if (slotsError) {
+      return NextResponse.json(
+        { error: slotsError.message },
+        { status: 500 }
+      );
+    }
+
+    allBrackets.push(bracket);
+    allSlots.push(...(insertedSlots || []));
+    allGames.push(...insertedGames);
   }
 
   return NextResponse.json({
-    bracket,
-    slots: insertedSlots,
-    games: insertedGames,
-    totalRounds,
+    brackets: allBrackets,
+    slots: allSlots,
+    games: allGames,
+    bracketCount,
   });
 }

@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import {
@@ -9,6 +10,7 @@ import {
   MessageSquare,
   Zap,
 } from "lucide-react";
+import { getProfile } from "@/lib/supabase/helpers";
 
 const features = [
   {
@@ -49,7 +51,10 @@ const features = [
   },
 ];
 
-export default function HomePage() {
+export default async function HomePage() {
+  const profile = await getProfile();
+  if (profile) redirect("/dashboard");
+
   return (
     <div className="flex flex-col min-h-screen">
       {/* Nav */}
@@ -68,7 +73,7 @@ export default function HomePage() {
 
       {/* Hero */}
       <section className="flex-1">
-        <div className="container max-w-5xl mx-auto px-4 py-20 text-center">
+        <div className="container max-w-5xl mx-auto px-4 py-20 min-h-[calc(100vh-3.5rem)] flex flex-col items-center justify-center text-center">
           <h1 className="text-4xl sm:text-5xl font-bold tracking-tight max-w-2xl mx-auto">
             The group chat that also runs your league
           </h1>

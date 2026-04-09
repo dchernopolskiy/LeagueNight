@@ -50,27 +50,6 @@ interface CalendarFiltersProps {
 type DateRange = "week" | "2weeks" | "month" | "all";
 type ViewMode = "calendar" | "list";
 
-/** Short sport prefix for calendar cell labels */
-const SPORT_ABBREV: Record<string, string> = {
-  Volleyball: "VB",
-  Basketball: "BB",
-  Pickleball: "PB",
-  Soccer: "SC",
-  Tennis: "TN",
-  Baseball: "BA",
-  Football: "FB",
-};
-
-function sportAbbrev(sport: string | null): string {
-  if (!sport) return "";
-  return SPORT_ABBREV[sport] || sport.slice(0, 2).toUpperCase();
-}
-
-/** Shorten team name for game lines: "Slam Dunkers" → "SD" */
-function teamInitials(name: string | undefined): string {
-  if (!name) return "?";
-  return name.split(/\s+/).map((w) => w[0]).join("").toUpperCase();
-}
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -471,41 +450,43 @@ export function CalendarView({ games, leagues, teams, locations = [], locationUn
               const blocks = getLeagueBlocks(dayGames);
               const MAX_BLOCK_LINES = 4; // Show up to 4 league event blocks
               const visibleBlocks = blocks.slice(0, MAX_BLOCK_LINES);
-              // After the league blocks, show a few individual game lines
-              const MAX_GAME_LINES = 2;
-              const allVisibleGames = visibleBlocks.flatMap((b) => b.games);
-              const gameLines = allVisibleGames.slice(0, MAX_GAME_LINES);
 
               // Open gym sessions for this day
               const dayOpenGym = openGymByDate.get(dateKey) || [];
 
+              const hasEvents = dayGames.length > 0 || dayOpenGym.length > 0;
+
               return (
-                <div
+                <button
+                  type="button"
                   key={dateKey}
                   className={`bg-background min-h-[110px] p-1.5 text-left transition-colors align-top ${
                     !isCurrentMonth ? "opacity-40" : ""
-                  } ${isSelected ? "ring-2 ring-primary ring-inset" : ""}`}
-                >
-                  {/* Date number — clickable to expand day panel */}
-                  <button
-                    type="button"
-                    className="hover:bg-accent rounded-full transition-colors"
-                    onClick={() => {
-                      if (dayGames.length > 0 || dayOpenGym.length > 0) {
-                        setSelectedDay(isSelected ? null : day);
+                  } ${isSelected ? "ring-2 ring-primary ring-inset" : ""} ${
+                    hasEvents ? "cursor-pointer hover:bg-accent/30" : ""
+                  }`}
+                  onClick={() => {
+                    if (hasEvents) {
+                      setSelectedDay(isSelected ? null : day);
+                      // Scroll to expanded day panel after a tick
+                      if (!isSelected) {
+                        setTimeout(() => {
+                          document.getElementById("day-schedule")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                        }, 50);
                       }
-                    }}
+                    }
+                  }}
+                >
+                  {/* Date number */}
+                  <span
+                    className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs ${
+                      isToday
+                        ? "bg-primary text-primary-foreground font-bold"
+                        : "font-medium"
+                    }`}
                   >
-                    <span
-                      className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs ${
-                        isToday
-                          ? "bg-primary text-primary-foreground font-bold"
-                          : "font-medium"
-                      }`}
-                    >
-                      {format(day, "d")}
-                    </span>
-                  </button>
+                    {format(day, "d")}
+                  </span>
 
                   {/* League event blocks */}
                   {visibleBlocks.length > 0 && (
@@ -514,67 +495,48 @@ export function CalendarView({ games, leagues, teams, locations = [], locationUn
                         const color = block.hasConflict
                           ? "bg-amber-100 text-amber-800 border-amber-300"
                           : blockColor(block.league.sport);
-                        const locLabel = block.location
-                          ? shortLocName(block.location.name)
-                          : null;
-                        return (
-                          <Link
-                            key={block.league.id}
-                            href={`/dashboard/leagues/${block.league.id}/schedule`}
-                            className={`block rounded border px-1 py-0.5 text-[10px] leading-tight truncate font-medium hover:opacity-80 transition-opacity ${color}`}
-                            onClick={(e) => e.stopPropagation()}
-                            title={`${block.league.sport || ""} ${block.league.name}${locLabel ? ` at ${block.location!.name}` : ""} — ${block.games.length} game${block.games.length !== 1 ? "s" : ""}`}
-                          >
-                            {sportAbbrev(block.league.sport)} {block.league.name}
-                            {locLabel && <span className="font-normal">, {locLabel}</span>}
-                          </Link>
-                        );
-                      })}
-
-                      {/* Individual game lines under the blocks */}
-                      {gameLines.map((g) => {
-                        const home = teamsMap.get(g.home_team_id);
-                        const away = teamsMap.get(g.away_team_id);
                         return (
                           <div
-                            key={g.id}
-                            className="text-[10px] leading-tight text-muted-foreground truncate pl-0.5"
+                            key={block.league.id}
+                            className={`rounded border px-1 py-0.5 text-[10px] leading-tight truncate font-medium ${color}`}
+                            title={`${block.league.sport || ""} ${block.league.name} — ${block.games.length} game${block.games.length !== 1 ? "s" : ""}`}
                           >
-                            <span className="text-foreground font-medium">
-                              {format(new Date(g.scheduled_at), "h:mm")}
-                            </span>{" "}
-                            {teamInitials(home?.name)} v {teamInitials(away?.name)}
+                            {block.league.name}
                           </div>
                         );
                       })}
-
                     </div>
                   )}
 
-                  {/* Open gym session blocks */}
+                  {/* Open gym / court rental blocks */}
                   {dayOpenGym.length > 0 && (
                     <div className={visibleBlocks.length > 0 ? "space-y-0.5" : "mt-0.5 space-y-0.5"}>
-                      {dayOpenGym.map((session) => (
-                        <Link
-                          key={session.id}
-                          href="/dashboard/open-gym"
-                          className="block rounded border px-1 py-0.5 text-[10px] leading-tight truncate font-medium hover:opacity-80 transition-opacity bg-indigo-100 text-indigo-900 border-indigo-200"
-                          onClick={(e) => e.stopPropagation()}
-                          title={`${session.title} · ${session.start_time.slice(0, 5)}–${session.end_time.slice(0, 5)}`}
-                        >
-                          {session.title}
-                        </Link>
-                      ))}
+                      {dayOpenGym.map((session) => {
+                        const isCourtRental = session.title?.toLowerCase().includes("court rental");
+                        return (
+                          <div
+                            key={session.id}
+                            className={`rounded border px-1 py-0.5 text-[10px] leading-tight truncate font-medium ${
+                              isCourtRental
+                                ? "bg-slate-100 text-slate-800 border-slate-200"
+                                : "bg-indigo-100 text-indigo-900 border-indigo-200"
+                            }`}
+                            title={`${session.title} · ${session.start_time.slice(0, 5)}–${session.end_time.slice(0, 5)}`}
+                          >
+                            {isCourtRental ? "Court Rental" : "Open Gym"}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
-                </div>
+                </button>
               );
             })}
           </div>
 
           {/* Expanded day panel — full schedule grouped by sport/league */}
           {selectedDay && (
-            <Card>
+            <Card id="day-schedule">
               <CardContent className="py-4 px-5">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-base font-semibold">

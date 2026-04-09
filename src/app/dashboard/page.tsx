@@ -27,13 +27,17 @@ export default async function DashboardPage() {
   if (!profile) redirect("/login");
 
   const supabase = await createClient();
-  const [leaguesRes, divisionsRes, teamsRes] = await Promise.all([
+  const [leaguesRes, staffRes, divisionsRes, teamsRes] = await Promise.all([
     supabase
       .from("leagues")
       .select("*")
       .eq("organizer_id", profile.id)
       .is("archived_at", null)
       .order("created_at", { ascending: false }),
+    supabase
+      .from("league_staff")
+      .select("league_id, leagues(*)")
+      .eq("profile_id", profile.id),
     supabase
       .from("divisions")
       .select("*")
@@ -43,7 +47,12 @@ export default async function DashboardPage() {
       .select("id, league_id, division_id"),
   ]);
 
-  const leagues = leaguesRes.data;
+  // Merge owned leagues + co-organized leagues (dedup)
+  const ownedIds = new Set((leaguesRes.data || []).map((l: any) => l.id));
+  const staffLeagues = (staffRes.data || [])
+    .map((s: any) => s.leagues)
+    .filter((l: any) => l && !l.archived_at && !ownedIds.has(l.id));
+  const leagues = [...(leaguesRes.data || []), ...staffLeagues];
   const allDivisions = divisionsRes.data;
   const allTeams = (teamsRes.data || []) as Pick<Team, "id" | "league_id" | "division_id">[];
 

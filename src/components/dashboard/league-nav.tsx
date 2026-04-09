@@ -16,6 +16,7 @@ import {
   Settings,
 } from "lucide-react";
 import type { Division } from "@/lib/types";
+import { useUnread } from "@/lib/hooks/use-unread";
 
 const tabs = [
   { suffix: "", label: "Overview", icon: LayoutDashboard },
@@ -49,6 +50,8 @@ export function LeagueNav({
   const searchParams = useSearchParams();
   const base = `/dashboard/leagues/${leagueId}`;
   const activeDivision = searchParams.get("division");
+  const { leagues: leagueUnread } = useUnread();
+  const unreadCount = leagueUnread[leagueId] || 0;
 
   return (
     <div className="space-y-2">
@@ -77,6 +80,11 @@ export function LeagueNav({
             >
               <tab.icon className="h-4 w-4" />
               {tab.label}
+              {tab.suffix === "/chat" && unreadCount > 0 && (
+                <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary text-primary-foreground text-[9px] font-semibold px-0.5">
+                  {unreadCount > 99 ? "99+" : unreadCount}
+                </span>
+              )}
             </Link>
           );
         })}

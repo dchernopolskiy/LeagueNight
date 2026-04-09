@@ -16,12 +16,15 @@ import {
   CalendarDays,
   MapPin,
   Dumbbell,
+  MessageSquare,
 } from "lucide-react";
 import { useState } from "react";
+import { useUnread } from "@/lib/hooks/use-unread";
 
 const navItems = [
   { href: "/dashboard", label: "My Leagues", icon: LayoutDashboard },
   { href: "/dashboard/calendar", label: "Calendar", icon: CalendarDays },
+  { href: "/dashboard/chats", label: "Chats", icon: MessageSquare },
   { href: "/dashboard/locations", label: "Locations", icon: MapPin },
   { href: "/dashboard/open-gym", label: "Open Gym", icon: Dumbbell },
   { href: "/dashboard/leagues/new", label: "New League", icon: Plus },
@@ -31,6 +34,7 @@ export function DashboardSidebar({ profile }: { profile: Profile }) {
   const pathname = usePathname();
   const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { totalUnread } = useUnread();
 
   async function handleLogout() {
     const supabase = createClient();
@@ -62,6 +66,11 @@ export function DashboardSidebar({ profile }: { profile: Profile }) {
           >
             <item.icon className="h-4 w-4" />
             {item.label}
+            {item.label === "Chats" && totalUnread > 0 && (
+              <span className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-semibold px-1">
+                {totalUnread > 99 ? "99+" : totalUnread}
+              </span>
+            )}
           </Link>
         ))}
       </nav>

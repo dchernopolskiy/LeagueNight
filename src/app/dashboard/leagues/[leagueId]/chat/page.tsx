@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import type { Message, Player, Team, Division } from "@/lib/types";
+import { useUnread } from "@/lib/hooks/use-unread";
 
 type ChannelType = Message["channel_type"];
 
@@ -73,6 +74,8 @@ export default function ChatPage() {
 
   // Delete confirm
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [organizerName, setOrganizerName] = useState<string>("Organizer");
+  const { channels: channelUnread, markRead } = useUnread();
 
   // Build channel list
   const channels = useMemo<Channel[]>(() => {
@@ -167,22 +170,22 @@ export default function ChatPage() {
       if (user) {
         const { data: profile } = await supabase
           .from("profiles")
-          .select("id")
+          .select("id, full_name")
           .eq("auth_id", user.id)
           .single();
 
         if (profile) {
           setCurrentProfileId(profile.id);
 
-          // Check if organizer
-          const { data: league } = await supabase
-            .from("leagues")
-            .select("organizer_id")
-            .eq("id", leagueId)
-            .single();
+          // Check if organizer or co-organizer
+          const [leagueCheck, staffCheck] = await Promise.all([
+            supabase.from("leagues").select("organizer_id").eq("id", leagueId).single(),
+            supabase.from("league_staff").select("id").eq("league_id", leagueId).eq("profile_id", profile.id),
+          ]);
 
-          if (league && league.organizer_id === profile.id) {
+          if ((leagueCheck.data && leagueCheck.data.organizer_id === profile.id) || (staffCheck.data && staffCheck.data.length > 0)) {
             setIsOrganizer(true);
+            setOrganizerName(profile.full_name || "Organizer");
           }
 
           const { data: existingPlayer } = await supabase
@@ -209,6 +212,13 @@ export default function ChatPage() {
     }
     load();
   }, [leagueId]);
+
+  // Mark channel as read when switching
+  useEffect(() => {
+    if (activeChannel) {
+      markRead(leagueId, activeChannel.key);
+    }
+  }, [activeChannel, leagueId, markRead]);
 
   // Load messages when active channel changes
   useEffect(() => {
@@ -301,7 +311,8 @@ export default function ChatPage() {
 
     const payload: Record<string, unknown> = {
       league_id: leagueId,
-      player_id: currentPlayerId,
+      player_id: currentPlayerId || null,
+      profile_id: currentProfileId,
       body: body.trim(),
       is_announcement: isAnnouncement,
       channel_type: activeChannel.type,
@@ -313,7 +324,8 @@ export default function ChatPage() {
       payload.recipient_profile_id = currentProfileId;
     }
 
-    await supabase.from("messages").insert(payload);
+    const { error } = await supabase.from("messages").insert(payload);
+    if (error) console.error("Failed to send message:", error);
     setBody("");
     setSending(false);
   }
@@ -372,7 +384,9 @@ export default function ChatPage() {
 
   function canEditDelete(msg: Message): boolean {
     if (isOrganizer) return true;
-    return msg.player_id === currentPlayerId;
+    if (msg.player_id && msg.player_id === currentPlayerId) return true;
+    if (msg.profile_id && msg.profile_id === currentProfileId) return true;
+    return false;
   }
 
   // Group channels by section
@@ -398,6 +412,7 @@ export default function ChatPage() {
               </p>
               {sectionChannels.map((ch) => {
                 const isMuted = mutedChannels.has(ch.key);
+                const chUnread = channelUnread[`${leagueId}:${ch.key}`] || 0;
                 return (
                   <button
                     key={ch.key}
@@ -411,6 +426,11 @@ export default function ChatPage() {
                     <ch.icon className="h-3.5 w-3.5 shrink-0" />
                     <span className="truncate flex-1">{ch.label}</span>
                     {isMuted && <BellOff className="h-3 w-3 shrink-0" />}
+                    {!isMuted && chUnread > 0 && activeChannel?.key !== ch.key && (
+                      <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary text-primary-foreground text-[9px] font-semibold px-0.5 shrink-0">
+                        {chUnread > 99 ? "99+" : chUnread}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -463,15 +483,16 @@ export default function ChatPage() {
             </p>
           )}
           {messages.map((msg) => {
-            const sender = playersMap.get(msg.player_id);
+            const sender = msg.player_id ? playersMap.get(msg.player_id) : null;
+            const senderName = sender?.name ?? (msg.profile_id === currentProfileId && isOrganizer ? organizerName : "Organizer");
             const isEditing = editingMessageId === msg.id;
-            const isOwn = msg.player_id === currentPlayerId;
+            const isOwn = msg.player_id === currentPlayerId || msg.profile_id === currentProfileId;
 
             if (isEditing) {
               return (
                 <div key={msg.id} className="space-y-1 bg-muted/30 rounded-lg p-3">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium">{sender?.name ?? "Unknown"}</span>
+                    <span className="text-sm font-medium">{senderName}</span>
                     <Badge variant="outline" className="text-[10px]">Editing</Badge>
                   </div>
                   <div className="flex gap-2">
@@ -510,7 +531,7 @@ export default function ChatPage() {
               <div key={msg.id} className="group space-y-0.5">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">
-                    {sender?.name ?? (isOrganizer && isOwn ? "You (Organizer)" : "Unknown")}
+                    {senderName}
                   </span>
                   {msg.is_announcement && (
                     <Badge variant="secondary" className="text-xs">

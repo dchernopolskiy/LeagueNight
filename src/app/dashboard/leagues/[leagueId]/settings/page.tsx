@@ -17,8 +17,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Copy, Check, ExternalLink, Plus, Trash2 } from "lucide-react";
-import type { League, LeagueSettings, Division } from "@/lib/types";
+import { Copy, Check, ExternalLink, Plus, Trash2, Shield, UserPlus, ArrowRightLeft } from "lucide-react";
+import type { League, LeagueSettings, Division, LeagueStaff } from "@/lib/types";
 
 export default function SettingsPage() {
   const { leagueId } = useParams<{ leagueId: string }>();
@@ -38,6 +38,15 @@ export default function SettingsPage() {
   const [newDivName, setNewDivName] = useState("");
   const [newDivLevel, setNewDivLevel] = useState("1");
   const [addingDiv, setAddingDiv] = useState(false);
+
+  // Co-organizer state
+  const [staff, setStaff] = useState<(LeagueStaff & { profile?: { full_name: string; email: string } })[]>([]);
+  const [currentProfileId, setCurrentProfileId] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<"admin" | "manager">("manager");
+  const [inviting, setInviting] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -66,6 +75,29 @@ export default function SettingsPage() {
         .eq("league_id", leagueId)
         .order("level");
       if (divs) setDivisions(divs as Division[]);
+
+      // Load current user profile
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("id")
+          .eq("auth_id", user.id)
+          .single();
+        if (profile) {
+          setCurrentProfileId(profile.id);
+          // Check if admin (original organizer)
+          const l = data as League;
+          setIsAdmin(l?.organizer_id === profile.id);
+        }
+      }
+
+      // Load co-organizer staff
+      const { data: staffData } = await supabase
+        .from("league_staff")
+        .select("*, profile:profiles(full_name, email)")
+        .eq("league_id", leagueId);
+      if (staffData) setStaff(staffData as any);
     }
     load();
   }, [leagueId]);
@@ -132,6 +164,90 @@ export default function SettingsPage() {
     navigator.clipboard.writeText(url);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }
+
+  async function inviteStaff() {
+    if (!inviteEmail.trim()) return;
+    setInviting(true);
+    setInviteError(null);
+    const supabase = createClient();
+
+    // Find profile by email
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("id, full_name, email")
+      .eq("email", inviteEmail.trim().toLowerCase())
+      .single();
+
+    if (!profile) {
+      setInviteError("No account found with that email.");
+      setInviting(false);
+      return;
+    }
+
+    // Can't add the original organizer as staff
+    if (profile.id === league?.organizer_id) {
+      setInviteError("That's the league owner — already has full access.");
+      setInviting(false);
+      return;
+    }
+
+    // Check if already staff
+    if (staff.some((s) => s.profile_id === profile.id)) {
+      setInviteError("Already a co-organizer.");
+      setInviting(false);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("league_staff")
+      .insert({
+        league_id: leagueId,
+        profile_id: profile.id,
+        role: inviteRole,
+        invited_by: currentProfileId,
+      })
+      .select("*, profile:profiles(full_name, email)")
+      .single();
+
+    if (error) {
+      setInviteError(error.message);
+    } else if (data) {
+      setStaff([...staff, data as any]);
+      setInviteEmail("");
+    }
+    setInviting(false);
+  }
+
+  async function removeStaff(staffId: string) {
+    const supabase = createClient();
+    await supabase.from("league_staff").delete().eq("id", staffId);
+    setStaff(staff.filter((s) => s.id !== staffId));
+  }
+
+  async function changeRole(staffId: string, newRole: "admin" | "manager") {
+    const supabase = createClient();
+    await supabase.from("league_staff").update({ role: newRole }).eq("id", staffId);
+    setStaff(staff.map((s) => (s.id === staffId ? { ...s, role: newRole } : s)));
+  }
+
+  async function transferAdmin(staffMember: typeof staff[0]) {
+    if (!confirm(`Transfer admin ownership to ${staffMember.profile?.full_name}? You will become a manager.`)) return;
+    const supabase = createClient();
+    // Update league organizer_id to the new admin
+    await supabase.from("leagues").update({ organizer_id: staffMember.profile_id }).eq("id", leagueId);
+    // Add current user as manager staff
+    await supabase.from("league_staff").insert({
+      league_id: leagueId,
+      profile_id: currentProfileId,
+      role: "manager",
+      invited_by: staffMember.profile_id,
+    });
+    // Remove the new admin from staff table (they're now the organizer)
+    await supabase.from("league_staff").delete().eq("id", staffMember.id);
+    // Reload
+    router.refresh();
+    window.location.reload();
   }
 
   if (!league) return <p className="text-muted-foreground">Loading...</p>;
@@ -271,6 +387,120 @@ export default function SettingsPage() {
               Add
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Shield className="h-4 w-4" />
+            Co-Organizers
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Current owner */}
+          <div className="flex items-center justify-between rounded-md border px-3 py-2 bg-muted/30">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium">You (Owner)</span>
+              <Badge className="text-[10px]">Admin</Badge>
+            </div>
+          </div>
+
+          {/* Staff list */}
+          {staff.map((s) => (
+            <div key={s.id} className="flex items-center justify-between rounded-md border px-3 py-2">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">{s.profile?.full_name || "Unknown"}</span>
+                <span className="text-xs text-muted-foreground">{s.profile?.email}</span>
+                <Badge variant={s.role === "admin" ? "default" : "secondary"} className="text-[10px]">
+                  {s.role === "admin" ? "Admin" : "Manager"}
+                </Badge>
+              </div>
+              {isAdmin && (
+                <div className="flex items-center gap-1">
+                  <Select
+                    value={s.role}
+                    onValueChange={(v) => v && changeRole(s.id, v as "admin" | "manager")}
+                  >
+                    <SelectTrigger className="h-7 w-[100px] text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="admin">Admin</SelectItem>
+                      <SelectItem value="manager">Manager</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {s.role === "admin" && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0 text-muted-foreground"
+                      onClick={() => transferAdmin(s)}
+                      title="Transfer ownership"
+                    >
+                      <ArrowRightLeft className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                    onClick={() => removeStaff(s.id)}
+                    title="Remove"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {staff.length === 0 && (
+            <p className="text-xs text-muted-foreground">No co-organizers yet.</p>
+          )}
+
+          {/* Invite form */}
+          {isAdmin && (
+            <>
+              <Separator />
+              <div className="space-y-2">
+                <Label className="text-xs">Invite co-organizer by email</Label>
+                <div className="flex gap-2">
+                  <Input
+                    type="email"
+                    placeholder="email@example.com"
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                    className="flex-1"
+                    onKeyDown={(e) => e.key === "Enter" && inviteStaff()}
+                  />
+                  <Select value={inviteRole} onValueChange={(v) => v && setInviteRole(v as "admin" | "manager")}>
+                    <SelectTrigger className="w-[110px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="manager">Manager</SelectItem>
+                      <SelectItem value="admin">Admin</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    variant="outline"
+                    onClick={inviteStaff}
+                    disabled={inviting || !inviteEmail.trim()}
+                  >
+                    <UserPlus className="h-4 w-4 mr-1" />
+                    Invite
+                  </Button>
+                </div>
+                {inviteError && (
+                  <p className="text-xs text-destructive">{inviteError}</p>
+                )}
+                <p className="text-[10px] text-muted-foreground">
+                  Admins have full access. Managers can manage games, teams, and chat but cannot remove the owner or other admins.
+                </p>
+              </div>
+            </>
+          )}
         </CardContent>
       </Card>
 

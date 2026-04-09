@@ -183,7 +183,8 @@ export interface Message {
   league_id: string;
   team_id: string | null;
   division_id: string | null;
-  player_id: string;
+  player_id: string | null;
+  profile_id: string | null;
   recipient_profile_id: string | null;
   body: string;
   is_announcement: boolean;
@@ -242,6 +243,23 @@ export interface OpenGymRsvp {
   player_phone: string | null;
   session_date: string;
   status: "confirmed" | "waitlist" | "cancelled";
+  created_at: string;
+}
+
+export interface ChatReadCursor {
+  id: string;
+  profile_id: string;
+  league_id: string;
+  channel_key: string;
+  last_read_at: string;
+}
+
+export interface LeagueStaff {
+  id: string;
+  league_id: string;
+  profile_id: string;
+  role: "admin" | "manager";
+  invited_by: string | null;
   created_at: string;
 }
 
