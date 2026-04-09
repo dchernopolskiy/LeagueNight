@@ -17,6 +17,7 @@ import {
   MapPin,
   Dumbbell,
   MessageSquare,
+  UserCircle,
 } from "lucide-react";
 import { useState } from "react";
 import { useUnread } from "@/lib/hooks/use-unread";
@@ -75,13 +76,20 @@ export function DashboardSidebar({ profile }: { profile: Profile }) {
         ))}
       </nav>
       <div className="p-3 border-t">
-        <div className="flex items-center justify-between px-3 py-2">
-          <span className="text-sm truncate">{profile.full_name}</span>
+        <div className="flex items-center gap-2 px-3 py-2">
+          <Link
+            href="/dashboard/profile"
+            onClick={() => setMobileOpen(false)}
+            className="flex items-center gap-2 flex-1 min-w-0 rounded-md hover:bg-accent/50 -mx-1 px-1 py-1 transition-colors"
+          >
+            <UserCircle className="h-5 w-5 shrink-0 text-muted-foreground" />
+            <span className="text-sm truncate">{profile.full_name}</span>
+          </Link>
           <Button
             variant="ghost"
             size="sm"
             onClick={handleLogout}
-            className="h-8 w-8 p-0"
+            className="h-8 w-8 p-0 shrink-0"
           >
             <LogOut className="h-4 w-4" />
           </Button>
