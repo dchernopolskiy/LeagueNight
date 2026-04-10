@@ -20,6 +20,7 @@ import {
   UserCircle,
   Download,
   ShieldCheck,
+  Zap,
 } from "lucide-react";
 import { useState } from "react";
 import { useUnread } from "@/lib/hooks/use-unread";
@@ -30,6 +31,7 @@ const navItems = [
   { href: "/dashboard/chats", label: "Chats", icon: MessageSquare },
   { href: "/dashboard/locations", label: "Locations", icon: MapPin },
   { href: "/dashboard/open-gym", label: "Open Gym", icon: Dumbbell },
+  { href: "/dashboard/scoreboard", label: "Scoreboard", icon: Zap },
   { href: "/dashboard/exports", label: "Exports", icon: Download },
   { href: "/dashboard/leagues/new", label: "New League", icon: Plus },
   { href: "/dashboard/admin", label: "Admin", icon: ShieldCheck },
