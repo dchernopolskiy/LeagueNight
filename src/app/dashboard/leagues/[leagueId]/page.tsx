@@ -1,7 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { ExternalLink, Link2 } from "lucide-react";
 import type { League, Team, Player, Game } from "@/lib/types";
+import { PublicLinkCopy } from "@/components/dashboard/public-link-copy";
 
 export default async function LeagueOverviewPage({
   params,
@@ -11,7 +13,7 @@ export default async function LeagueOverviewPage({
   const { leagueId } = await params;
   const supabase = await createClient();
 
-  const [teamsRes, playersRes, gamesRes] = await Promise.all([
+  const [teamsRes, playersRes, gamesRes, leagueRes] = await Promise.all([
     supabase.from("teams").select("*").eq("league_id", leagueId),
     supabase.from("players").select("*").eq("league_id", leagueId),
     supabase
@@ -21,14 +23,38 @@ export default async function LeagueOverviewPage({
       .eq("status", "scheduled")
       .order("scheduled_at")
       .limit(5),
+    supabase.from("leagues").select("slug").eq("id", leagueId).single(),
   ]);
 
   const teams = (teamsRes.data || []) as Team[];
   const players = (playersRes.data || []) as Player[];
   const upcomingGames = (gamesRes.data || []) as Game[];
+  const slug = leagueRes.data?.slug || "";
 
   return (
     <div className="grid gap-4 sm:grid-cols-3">
+      {/* Public Link - full width */}
+      {slug && (
+        <div className="sm:col-span-3">
+          <Card>
+            <CardContent className="flex items-center gap-3 py-3">
+              <Link2 className="h-4 w-4 text-muted-foreground shrink-0" />
+              <code className="text-sm bg-muted px-2 py-1 rounded flex-1 truncate">
+                /league/{slug}
+              </code>
+              <PublicLinkCopy slug={slug} />
+              <a
+                href={`/league/${slug}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center h-8 w-8 rounded-md border text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors shrink-0"
+              >
+                <ExternalLink className="h-4 w-4" />
+              </a>
+            </CardContent>
+          </Card>
+        </div>
+      )}
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium text-muted-foreground">

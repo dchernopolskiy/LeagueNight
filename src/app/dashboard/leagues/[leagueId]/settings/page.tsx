@@ -95,7 +95,7 @@ export default function SettingsPage() {
       // Load co-organizer staff
       const { data: staffData } = await supabase
         .from("league_staff")
-        .select("*, profile:profiles(full_name, email)")
+        .select("*, profile:profiles!league_staff_profile_id_fkey(full_name, email)")
         .eq("league_id", leagueId);
       if (staffData) setStaff(staffData as any);
     }
@@ -207,7 +207,7 @@ export default function SettingsPage() {
         role: inviteRole,
         invited_by: currentProfileId,
       })
-      .select("*, profile:profiles(full_name, email)")
+      .select("*, profile:profiles!league_staff_profile_id_fkey(full_name, email)")
       .single();
 
     if (error) {

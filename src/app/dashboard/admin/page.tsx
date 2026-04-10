@@ -127,7 +127,7 @@ export default function AdminPage() {
     // Fetch all staff for these leagues
     const { data: staffData } = await supabase
       .from("league_staff")
-      .select("*, profile:profiles(full_name, email)")
+      .select("*, profile:profiles!league_staff_profile_id_fkey(full_name, email)")
       .in("league_id", leagueIds);
 
     const staffList = (staffData || []) as StaffWithProfile[];
@@ -299,7 +299,7 @@ export default function AdminPage() {
           role: addRole,
           invited_by: profile?.id,
         })
-        .select("*, profile:profiles(full_name, email)")
+        .select("*, profile:profiles!league_staff_profile_id_fkey(full_name, email)")
         .single();
 
       if (!error && data) {
@@ -369,7 +369,7 @@ export default function AdminPage() {
             role: bulkRole,
             invited_by: profile?.id,
           })
-          .select("*, profile:profiles(full_name, email)")
+          .select("*, profile:profiles!league_staff_profile_id_fkey(full_name, email)")
           .single();
 
         if (!error && data) {
