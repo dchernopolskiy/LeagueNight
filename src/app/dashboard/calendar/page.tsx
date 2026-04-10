@@ -10,12 +10,18 @@ export default async function CalendarPage() {
 
   const supabase = await createClient();
 
-  // Get all leagues for this organizer
-  const { data: leagues } = await supabase
-    .from("leagues")
-    .select("*")
-    .eq("organizer_id", profile.id)
-    .is("archived_at", null);
+  // Get all leagues for this user (owned, staff, or player)
+  const [ownedRes, staffRes, playerRes] = await Promise.all([
+    supabase.from("leagues").select("*").eq("organizer_id", profile.id).is("archived_at", null),
+    supabase.from("league_staff").select("league_id, leagues(*)").eq("profile_id", profile.id),
+    supabase.from("players").select("league_id, leagues(*)").eq("profile_id", profile.id),
+  ]);
+  const owned = (ownedRes.data || []) as League[];
+  const knownIds = new Set(owned.map((l) => l.id));
+  const staffLeagues = (staffRes.data || []).map((s: any) => s.leagues).filter((l: any) => l && !l.archived_at && !knownIds.has(l.id)) as League[];
+  staffLeagues.forEach((l) => knownIds.add(l.id));
+  const playerLeagues = (playerRes.data || []).map((p: any) => p.leagues).filter((l: any) => l && !l.archived_at && !knownIds.has(l.id)) as League[];
+  const leagues = [...owned, ...staffLeagues, ...playerLeagues];
 
   if (!leagues || leagues.length === 0) {
     return (

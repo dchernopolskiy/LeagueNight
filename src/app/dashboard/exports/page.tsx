@@ -82,40 +82,20 @@ export default function ExportsPage() {
       if (!prof) return;
       setProfile(prof as Profile);
 
-      // Get leagues where user is organizer
-      const { data: ownedLeagues } = await supabase
-        .from("leagues")
-        .select("*")
-        .eq("organizer_id", prof.id)
-        .is("archived_at", null);
+      // Get leagues where user is organizer, staff, or player
+      const [ownedRes, staffRes, playerRes] = await Promise.all([
+        supabase.from("leagues").select("*").eq("organizer_id", prof.id).is("archived_at", null),
+        supabase.from("league_staff").select("leagues(*)").eq("profile_id", prof.id),
+        supabase.from("players").select("leagues(*)").eq("profile_id", prof.id),
+      ]);
 
-      // Get leagues where user is staff (co-organizer)
-      const { data: staffRows } = await supabase
-        .from("league_staff")
-        .select("league_id")
-        .eq("profile_id", prof.id);
-
-      const staffLeagueIds = (staffRows || []).map(
-        (s: { league_id: string }) => s.league_id
-      );
-
-      let staffLeagues: League[] = [];
-      if (staffLeagueIds.length > 0) {
-        const { data } = await supabase
-          .from("leagues")
-          .select("*")
-          .in("id", staffLeagueIds)
-          .is("archived_at", null);
-        staffLeagues = (data || []) as League[];
-      }
-
-      // Merge and deduplicate
       const allLeagues = [
-        ...((ownedLeagues || []) as League[]),
-        ...staffLeagues,
+        ...((ownedRes.data || []) as League[]),
+        ...((staffRes.data || []).map((s: any) => s.leagues).filter(Boolean) as League[]),
+        ...((playerRes.data || []).map((p: any) => p.leagues).filter(Boolean) as League[]),
       ];
       const uniqueLeagues = Array.from(
-        new Map(allLeagues.map((l) => [l.id, l])).values()
+        new Map(allLeagues.filter((l) => !l.archived_at).map((l) => [l.id, l])).values()
       );
       setLeagues(uniqueLeagues);
 

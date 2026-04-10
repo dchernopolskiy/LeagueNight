@@ -19,7 +19,7 @@ export default async function LeagueLayout({
   if (!profile) redirect("/login");
 
   const supabase = await createClient();
-  const [leagueRes, divisionsRes, staffRes] = await Promise.all([
+  const [leagueRes, divisionsRes, staffRes, playerRes] = await Promise.all([
     supabase
       .from("leagues")
       .select("*")
@@ -35,12 +35,19 @@ export default async function LeagueLayout({
       .select("profile_id")
       .eq("league_id", leagueId)
       .eq("profile_id", profile.id),
+    supabase
+      .from("players")
+      .select("id")
+      .eq("league_id", leagueId)
+      .eq("profile_id", profile.id)
+      .limit(1),
   ]);
 
-  // Allow access if organizer OR co-organizer
+  // Allow access if organizer, co-organizer, or player
   const isOrganizer = leagueRes.data?.organizer_id === profile.id;
   const isStaff = (staffRes.data || []).length > 0;
-  if (!leagueRes.data || (!isOrganizer && !isStaff)) notFound();
+  const isPlayer = (playerRes.data || []).length > 0;
+  if (!leagueRes.data || (!isOrganizer && !isStaff && !isPlayer)) notFound();
 
   const league = leagueRes.data as League;
   const divisions = (divisionsRes.data || []) as Division[];

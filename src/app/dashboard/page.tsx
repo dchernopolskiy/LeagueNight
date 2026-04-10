@@ -27,7 +27,7 @@ export default async function DashboardPage() {
   if (!profile) redirect("/login");
 
   const supabase = await createClient();
-  const [leaguesRes, staffRes, divisionsRes, teamsRes] = await Promise.all([
+  const [leaguesRes, staffRes, playerRes, divisionsRes, teamsRes] = await Promise.all([
     supabase
       .from("leagues")
       .select("*")
@@ -39,6 +39,10 @@ export default async function DashboardPage() {
       .select("league_id, leagues(*)")
       .eq("profile_id", profile.id),
     supabase
+      .from("players")
+      .select("league_id, leagues(*)")
+      .eq("profile_id", profile.id),
+    supabase
       .from("divisions")
       .select("*")
       .order("level"),
@@ -47,12 +51,16 @@ export default async function DashboardPage() {
       .select("id, league_id, division_id"),
   ]);
 
-  // Merge owned leagues + co-organized leagues (dedup)
+  // Merge owned leagues + co-organized leagues + player leagues (dedup)
   const ownedIds = new Set((leaguesRes.data || []).map((l: any) => l.id));
   const staffLeagues = (staffRes.data || [])
     .map((s: any) => s.leagues)
     .filter((l: any) => l && !l.archived_at && !ownedIds.has(l.id));
-  const leagues = [...(leaguesRes.data || []), ...staffLeagues];
+  const knownIds = new Set([...ownedIds, ...staffLeagues.map((l: any) => l.id)]);
+  const playerLeagues = (playerRes.data || [])
+    .map((p: any) => p.leagues)
+    .filter((l: any) => l && !l.archived_at && !knownIds.has(l.id));
+  const leagues = [...(leaguesRes.data || []), ...staffLeagues, ...playerLeagues];
   const allDivisions = divisionsRes.data;
   const allTeams = (teamsRes.data || []) as Pick<Team, "id" | "league_id" | "division_id">[];
 

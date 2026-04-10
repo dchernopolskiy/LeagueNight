@@ -9,8 +9,8 @@ export default async function ChatsPage() {
 
   const supabase = await createServerClient();
 
-  // Fetch owned leagues + co-organized leagues
-  const [ownedRes, staffRes] = await Promise.all([
+  // Fetch owned leagues + co-organized leagues + player leagues
+  const [ownedRes, staffRes, playerRes] = await Promise.all([
     supabase
       .from("leagues")
       .select("id, name, sport, divisions(id, name)")
@@ -20,13 +20,21 @@ export default async function ChatsPage() {
       .from("league_staff")
       .select("leagues(id, name, sport, divisions(id, name))")
       .eq("profile_id", profile.id),
+    supabase
+      .from("players")
+      .select("leagues(id, name, sport, divisions(id, name))")
+      .eq("profile_id", profile.id),
   ]);
 
   const ownedIds = new Set((ownedRes.data || []).map((l) => l.id));
   const staffLeagues = (staffRes.data || [])
     .map((s: any) => s.leagues)
     .filter((l: any) => l && !ownedIds.has(l.id));
-  const leagues = [...(ownedRes.data || []), ...staffLeagues];
+  const knownIds = new Set([...ownedIds, ...staffLeagues.map((l: any) => l.id)]);
+  const playerLeagues = (playerRes.data || [])
+    .map((p: any) => p.leagues)
+    .filter((l: any) => l && !knownIds.has(l.id));
+  const leagues = [...(ownedRes.data || []), ...staffLeagues, ...playerLeagues];
 
   // Fetch latest message per league for preview
   const leagueIds = leagues.map((l: any) => l.id);

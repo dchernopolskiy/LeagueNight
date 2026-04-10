@@ -105,15 +105,19 @@ export default function ScoreboardPage() {
     if (!profile) return;
     setProfileId(profile.id);
 
-    const [ownedRes, staffRes] = await Promise.all([
+    const [ownedRes, staffRes, playerRes] = await Promise.all([
       supabase.from("leagues").select("*").eq("organizer_id", profile.id),
       supabase.from("league_staff").select("*, leagues(*)").eq("profile_id", profile.id),
+      supabase.from("players").select("league_id, leagues(*)").eq("profile_id", profile.id),
     ]);
 
-    const leagues: League[] = [
-      ...((ownedRes.data || []) as League[]),
-      ...((staffRes.data || []).map((s: any) => s.leagues).filter(Boolean) as League[]),
-    ];
+    const owned = (ownedRes.data || []) as League[];
+    const staffLeagues = (staffRes.data || []).map((s: any) => s.leagues).filter(Boolean) as League[];
+    const knownIds = new Set([...owned.map(l => l.id), ...staffLeagues.map(l => l.id)]);
+    const playerLeagues = (playerRes.data || [])
+      .map((p: any) => p.leagues)
+      .filter((l: any) => l && !knownIds.has(l.id)) as League[];
+    const leagues: League[] = [...owned, ...staffLeagues, ...playerLeagues];
     const leagueMap = new Map(leagues.map((l) => [l.id, l]));
     const leagueIds = [...leagueMap.keys()];
 
