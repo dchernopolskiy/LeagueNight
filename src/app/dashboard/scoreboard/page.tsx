@@ -43,6 +43,14 @@ function useIsTouchDevice() {
   return isTouch;
 }
 
+function useCanFullscreen() {
+  const [can, setCan] = useState(false);
+  useEffect(() => {
+    setCan(typeof document.documentElement.requestFullscreen === "function");
+  }, []);
+  return can;
+}
+
 export default function ScoreboardPage() {
   const [allGames, setAllGames] = useState<GameWithMeta[]>([]);
   const [loading, setLoading] = useState(true);
@@ -62,6 +70,7 @@ export default function ScoreboardPage() {
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const isTouch = useIsTouchDevice();
+  const canFullscreen = useCanFullscreen();
   const liveContainerRef = useRef<HTMLDivElement>(null);
 
   // Swipe tracking for live mode
@@ -329,7 +338,7 @@ export default function ScoreboardPage() {
         <div
           ref={liveContainerRef}
           className="fixed inset-0 z-50 bg-black flex flex-col select-none"
-          style={{ touchAction: "none" }}
+          style={{ touchAction: "none", height: "100dvh" }}
         >
           {/* Minimal top bar */}
           <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-2 py-1 bg-black/40">
@@ -359,14 +368,16 @@ export default function ScoreboardPage() {
               >
                 <RotateCcw className="h-3.5 w-3.5" />
               </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-white/60 hover:text-white hover:bg-white/10 h-8 w-8 p-0"
-                onClick={toggleFullscreen}
-              >
-                {isFullscreen ? <Minimize className="h-3.5 w-3.5" /> : <Maximize className="h-3.5 w-3.5" />}
-              </Button>
+              {canFullscreen && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-white/60 hover:text-white hover:bg-white/10 h-8 w-8 p-0"
+                  onClick={toggleFullscreen}
+                >
+                  {isFullscreen ? <Minimize className="h-3.5 w-3.5" /> : <Maximize className="h-3.5 w-3.5" />}
+                </Button>
+              )}
             </div>
           </div>
 

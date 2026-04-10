@@ -31,7 +31,7 @@ const navItems = [
   { href: "/dashboard/chats", label: "Chats", icon: MessageSquare },
   { href: "/dashboard/locations", label: "Locations", icon: MapPin },
   { href: "/dashboard/open-gym", label: "Open Gym", icon: Dumbbell },
-  { href: "/dashboard/scoreboard", label: "Scoreboard", icon: Zap },
+  { href: "/dashboard/scoreboard", label: "Record Scores", icon: Zap },
   { href: "/dashboard/exports", label: "Exports", icon: Download },
   { href: "/dashboard/leagues/new", label: "New League", icon: Plus },
   { href: "/dashboard/admin", label: "Admin", icon: ShieldCheck },
