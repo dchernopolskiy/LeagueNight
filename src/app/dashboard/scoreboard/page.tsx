@@ -16,8 +16,11 @@ import {
   MapPin,
   Zap,
   Plus,
+  Minus,
   Monitor,
-  Keyboard,
+  Maximize,
+  Minimize,
+  X,
 } from "lucide-react";
 import { format, isToday, isTomorrow, isYesterday, addDays, subDays } from "date-fns";
 import type { Game, Team, League, LeagueSettings } from "@/lib/types";
@@ -31,6 +34,14 @@ interface GameWithMeta extends Game {
 
 type ViewState = "list" | "scoring";
 type ScoringMode = "input" | "live";
+
+function useIsTouchDevice() {
+  const [isTouch, setIsTouch] = useState(false);
+  useEffect(() => {
+    setIsTouch("ontouchstart" in window || navigator.maxTouchPoints > 0);
+  }, []);
+  return isTouch;
+}
 
 export default function ScoreboardPage() {
   const [allGames, setAllGames] = useState<GameWithMeta[]>([]);
@@ -48,13 +59,28 @@ export default function ScoreboardPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [scoringMode, setScoringMode] = useState<ScoringMode>("input");
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const isTouch = useIsTouchDevice();
+  const liveContainerRef = useRef<HTMLDivElement>(null);
 
   // Swipe tracking for live mode
   const homeTouchStart = useRef<{ y: number; time: number } | null>(null);
   const awayTouchStart = useRef<{ y: number; time: number } | null>(null);
+  // Track if touch just handled the event (prevent onClick double-fire)
+  const touchHandled = useRef(false);
 
   useEffect(() => {
     loadGames();
+  }, []);
+
+  // Listen for fullscreen changes
+  useEffect(() => {
+    function onFsChange() {
+      setIsFullscreen(!!document.fullscreenElement);
+    }
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
   }, []);
 
   async function loadGames() {
@@ -190,36 +216,27 @@ export default function ScoreboardPage() {
         )
       );
       setSaved(true);
-      setTimeout(() => { setView("list"); setActiveGame(null); setSaved(false); }, 1200);
+      setTimeout(() => {
+        setView("list");
+        setActiveGame(null);
+        setSaved(false);
+        // Exit fullscreen if active
+        if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {});
+        }
+      }, 1200);
     }
     setSaving(false);
   }
 
-  // Touch handlers for live scoreboard
-  const handleTouchStart = useCallback((side: "home" | "away", e: React.TouchEvent) => {
-    const ref = side === "home" ? homeTouchStart : awayTouchStart;
-    ref.current = { y: e.touches[0].clientY, time: Date.now() };
-  }, []);
-
-  const handleTouchEnd = useCallback((side: "home" | "away", e: React.TouchEvent) => {
-    const ref = side === "home" ? homeTouchStart : awayTouchStart;
-    const setter = side === "home" ? setHomeScore : setAwayScore;
-    if (!ref.current) return;
-
-    const dy = e.changedTouches[0].clientY - ref.current.y;
-    const dt = Date.now() - ref.current.time;
-
-    if (Math.abs(dy) > 30 && dt < 500) {
-      // Swipe down = -1
-      if (dy > 0) setter((p) => Math.max(0, p - 1));
-      // Swipe up = also -1 (any swipe = subtract)
-      else setter((p) => Math.max(0, p - 1));
+  function toggleFullscreen() {
+    if (!liveContainerRef.current) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
     } else {
-      // Tap = +1
-      setter((p) => p + 1);
+      liveContainerRef.current.requestFullscreen().catch(() => {});
     }
-    ref.current = null;
-  }, []);
+  }
 
   // --- SCORING VIEW ---
   if (view === "scoring" && activeGame) {
@@ -239,7 +256,6 @@ export default function ScoreboardPage() {
     // LIVE SCOREBOARD — full-screen tap/swipe
     // ==========================================
     if (scoringMode === "live") {
-      // For sets mode in live, we track the current set's points
       const liveHome = isGameMode ? homeScore : (setScores[currentSet]?.home || 0);
       const liveAway = isGameMode ? awayScore : (setScores[currentSet]?.away || 0);
 
@@ -253,80 +269,136 @@ export default function ScoreboardPage() {
 
         if (isGameMode) {
           const setter = side === "home" ? setHomeScore : setAwayScore;
-          if (isSwipe) setter((p) => Math.max(0, p - 1));
-          else setter((p) => p + 1);
+          if (isSwipe && dy > 0) setter((p) => Math.max(0, p - 1));
+          else if (!isSwipe) setter((p) => p + 1);
         } else {
-          // Sets mode — modify current set
           const next = [...setScores];
           const cur = next[currentSet];
           if (side === "home") {
-            next[currentSet] = { ...cur, home: isSwipe ? Math.max(0, cur.home - 1) : cur.home + 1 };
+            next[currentSet] = {
+              ...cur,
+              home: isSwipe && dy > 0 ? Math.max(0, cur.home - 1) : isSwipe ? cur.home : cur.home + 1,
+            };
           } else {
-            next[currentSet] = { ...cur, away: isSwipe ? Math.max(0, cur.away - 1) : cur.away + 1 };
+            next[currentSet] = {
+              ...cur,
+              away: isSwipe && dy > 0 ? Math.max(0, cur.away - 1) : isSwipe ? cur.away : cur.away + 1,
+            };
           }
           setSetScores(next);
         }
         ref.current = null;
+        // Mark that touch handled this interaction
+        touchHandled.current = true;
+        setTimeout(() => { touchHandled.current = false; }, 300);
+      };
+
+      const handleClick = (side: "home" | "away") => {
+        // Skip if touch already handled (prevents double-fire on mobile)
+        if (touchHandled.current) return;
+
+        if (isGameMode) {
+          const setter = side === "home" ? setHomeScore : setAwayScore;
+          setter((p) => p + 1);
+        } else {
+          const next = [...setScores];
+          next[currentSet] = {
+            ...next[currentSet],
+            [side]: next[currentSet][side] + 1,
+          };
+          setSetScores(next);
+        }
+      };
+
+      const handleMinus = (side: "home" | "away", e: React.MouseEvent) => {
+        e.stopPropagation();
+        if (isGameMode) {
+          const setter = side === "home" ? setHomeScore : setAwayScore;
+          setter((p) => Math.max(0, p - 1));
+        } else {
+          const next = [...setScores];
+          next[currentSet] = {
+            ...next[currentSet],
+            [side]: Math.max(0, next[currentSet][side] - 1),
+          };
+          setSetScores(next);
+        }
       };
 
       return (
-        <div className="fixed inset-0 z-50 bg-black flex flex-col select-none" style={{ touchAction: "none" }}>
+        <div
+          ref={liveContainerRef}
+          className="fixed inset-0 z-50 bg-black flex flex-col select-none"
+          style={{ touchAction: "none" }}
+        >
           {/* Minimal top bar */}
-          <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-2 py-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-white/60 hover:text-white hover:bg-white/10 h-8"
-              onClick={() => setScoringMode("input")}
-            >
-              <ChevronLeft className="h-4 w-4 mr-1" /> Exit
-            </Button>
-            <span className="text-white/40 text-[10px]">
-              {activeGame.league.name}
-            </span>
+          <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-2 py-1 bg-black/40">
             <Button
               variant="ghost"
               size="sm"
               className="text-white/60 hover:text-white hover:bg-white/10 h-8"
               onClick={() => {
-                if (isGameMode) { setHomeScore(0); setAwayScore(0); }
-                else { setSetScores((prev) => prev.map(() => ({ home: 0, away: 0 }))); setCurrentSet(0); }
+                setScoringMode("input");
+                if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
               }}
             >
-              <RotateCcw className="h-3.5 w-3.5" />
+              <X className="h-4 w-4 mr-1" /> Exit
             </Button>
+            <span className="text-white/40 text-xs">
+              {activeGame.league.name}
+            </span>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-white/60 hover:text-white hover:bg-white/10 h-8 w-8 p-0"
+                onClick={() => {
+                  if (isGameMode) { setHomeScore(0); setAwayScore(0); }
+                  else { setSetScores((prev) => prev.map(() => ({ home: 0, away: 0 }))); setCurrentSet(0); }
+                }}
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-white/60 hover:text-white hover:bg-white/10 h-8 w-8 p-0"
+                onClick={toggleFullscreen}
+              >
+                {isFullscreen ? <Minimize className="h-3.5 w-3.5" /> : <Maximize className="h-3.5 w-3.5" />}
+              </Button>
+            </div>
           </div>
 
           {/* Two-panel scoreboard */}
           <div className="flex-1 flex">
             {/* Home side — BLUE */}
             <div
-              className="flex-1 bg-blue-600 flex flex-col items-center justify-center relative cursor-pointer"
-              onTouchStart={(e) => { homeTouchStart.current = { y: e.touches[0].clientY, time: Date.now() }; }}
+              className="flex-1 bg-blue-600 flex flex-col items-center justify-center relative cursor-pointer active:bg-blue-700 transition-colors"
+              onTouchStart={(e) => {
+                homeTouchStart.current = { y: e.touches[0].clientY, time: Date.now() };
+              }}
               onTouchEnd={(e) => handleLiveTouchEnd("home", e)}
-              onClick={() => {
-                // Desktop fallback: click = +1
-                if (isGameMode) setHomeScore((p) => p + 1);
-                else {
-                  const next = [...setScores];
-                  next[currentSet] = { ...next[currentSet], home: next[currentSet].home + 1 };
-                  setSetScores(next);
-                }
-              }}
-              onContextMenu={(e) => {
-                // Right-click = -1 on desktop
-                e.preventDefault();
-                if (isGameMode) setHomeScore((p) => Math.max(0, p - 1));
-                else {
-                  const next = [...setScores];
-                  next[currentSet] = { ...next[currentSet], home: Math.max(0, next[currentSet].home - 1) };
-                  setSetScores(next);
-                }
-              }}
+              onClick={() => handleClick("home")}
+              onContextMenu={(e) => { e.preventDefault(); handleMinus("home", e as any); }}
             >
-              <span className="text-white font-bold leading-none" style={{ fontSize: "min(35vw, 35vh)" }}>
+              <span
+                className="text-white font-bold leading-none tabular-nums"
+                style={{ fontSize: "min(35vw, 35vh)" }}
+              >
                 {liveHome}
               </span>
+
+              {/* Desktop minus button */}
+              {!isTouch && (
+                <button
+                  className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-blue-800/60 hover:bg-blue-800 text-white/70 hover:text-white rounded-full h-10 w-10 flex items-center justify-center transition-colors"
+                  onClick={(e) => handleMinus("home", e)}
+                >
+                  <Minus className="h-5 w-5" />
+                </button>
+              )}
+
               <div className="absolute bottom-4 left-0 right-0 text-center">
                 <span className="bg-blue-800/80 text-white px-4 py-1.5 rounded text-sm font-medium inline-block max-w-[90%] truncate">
                   {activeGame.homeTeam.name}
@@ -336,30 +408,31 @@ export default function ScoreboardPage() {
 
             {/* Away side — RED */}
             <div
-              className="flex-1 bg-red-600 flex flex-col items-center justify-center relative cursor-pointer"
-              onTouchStart={(e) => { awayTouchStart.current = { y: e.touches[0].clientY, time: Date.now() }; }}
+              className="flex-1 bg-red-600 flex flex-col items-center justify-center relative cursor-pointer active:bg-red-700 transition-colors"
+              onTouchStart={(e) => {
+                awayTouchStart.current = { y: e.touches[0].clientY, time: Date.now() };
+              }}
               onTouchEnd={(e) => handleLiveTouchEnd("away", e)}
-              onClick={() => {
-                if (isGameMode) setAwayScore((p) => p + 1);
-                else {
-                  const next = [...setScores];
-                  next[currentSet] = { ...next[currentSet], away: next[currentSet].away + 1 };
-                  setSetScores(next);
-                }
-              }}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                if (isGameMode) setAwayScore((p) => Math.max(0, p - 1));
-                else {
-                  const next = [...setScores];
-                  next[currentSet] = { ...next[currentSet], away: Math.max(0, next[currentSet].away - 1) };
-                  setSetScores(next);
-                }
-              }}
+              onClick={() => handleClick("away")}
+              onContextMenu={(e) => { e.preventDefault(); handleMinus("away", e as any); }}
             >
-              <span className="text-white font-bold leading-none" style={{ fontSize: "min(35vw, 35vh)" }}>
+              <span
+                className="text-white font-bold leading-none tabular-nums"
+                style={{ fontSize: "min(35vw, 35vh)" }}
+              >
                 {liveAway}
               </span>
+
+              {/* Desktop minus button */}
+              {!isTouch && (
+                <button
+                  className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-red-800/60 hover:bg-red-800 text-white/70 hover:text-white rounded-full h-10 w-10 flex items-center justify-center transition-colors"
+                  onClick={(e) => handleMinus("away", e)}
+                >
+                  <Minus className="h-5 w-5" />
+                </button>
+              )}
+
               <div className="absolute bottom-4 left-0 right-0 text-center">
                 <span className="bg-red-800/80 text-white px-4 py-1.5 rounded text-sm font-medium inline-block max-w-[90%] truncate">
                   {activeGame.awayTeam.name}
@@ -367,6 +440,13 @@ export default function ScoreboardPage() {
               </div>
             </div>
           </div>
+
+          {/* Swipe hint on mobile */}
+          {isTouch && (
+            <div className="bg-black text-white/30 text-center text-[10px] py-0.5">
+              tap +1 · swipe down −1
+            </div>
+          )}
 
           {/* Sets bar (volleyball/sets mode only) */}
           {!isGameMode && (
@@ -391,13 +471,19 @@ export default function ScoreboardPage() {
           )}
 
           {/* Bottom submit bar */}
-          <div className="bg-black px-4 py-2 flex gap-2">
+          <div className="bg-black px-4 py-3 safe-area-pb">
             <Button
-              className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+              className="w-full bg-green-600 hover:bg-green-700 text-white h-12 text-base font-semibold"
               onClick={submitScore}
               disabled={saving || saved}
             >
-              {saved ? <><Check className="h-4 w-4 mr-2" /> Saved!</> : saving ? "Saving..." : <><Check className="h-4 w-4 mr-2" /> Submit Final</>}
+              {saved ? (
+                <><Check className="h-5 w-5 mr-2" /> Saved!</>
+              ) : saving ? (
+                "Saving..."
+              ) : (
+                <><Check className="h-5 w-5 mr-2" /> Submit Final</>
+              )}
             </Button>
           </div>
         </div>
@@ -405,26 +491,26 @@ export default function ScoreboardPage() {
     }
 
     // ==========================================
-    // INPUT MODE — default, type final scores
+    // INPUT MODE — polished score entry
     // ==========================================
     return (
       <div className="fixed inset-0 z-50 bg-background flex flex-col">
         {/* Top bar */}
-        <div className="flex items-center justify-between p-3 border-b bg-card">
+        <div className="flex items-center justify-between px-3 py-2.5 border-b bg-card">
           <Button variant="ghost" size="sm" onClick={() => { setView("list"); setActiveGame(null); }}>
             <ChevronLeft className="h-4 w-4 mr-1" /> Back
           </Button>
           <div className="text-center">
-            <p className="text-xs text-muted-foreground">{activeGame.league.name}</p>
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-sm font-medium">{activeGame.league.name}</p>
+            <p className="text-[11px] text-muted-foreground">
               {format(new Date(activeGame.scheduled_at), "h:mm a")}
-              {activeGame.venue && ` \u00B7 ${activeGame.venue}`}
+              {activeGame.venue && ` · ${activeGame.venue}`}
             </p>
           </div>
           <Button
             variant="outline"
             size="sm"
-            className="text-xs gap-1"
+            className="text-xs gap-1.5"
             onClick={() => setScoringMode("live")}
             title="Live Scoreboard"
           >
@@ -433,112 +519,225 @@ export default function ScoreboardPage() {
         </div>
 
         {/* Main input area */}
-        <div className="flex-1 flex flex-col justify-center px-6 gap-8">
+        <div className="flex-1 overflow-auto">
           {/* Game mode: direct number input */}
           {isGameMode && (
-            <div className="space-y-6">
-              {/* Home team */}
-              <div className="flex items-center gap-4">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{activeGame.homeTeam.name}</p>
-                  <p className="text-[10px] text-muted-foreground">Home</p>
+            <div className="flex flex-col items-center justify-center min-h-full px-6 py-8">
+              {/* Matchup header */}
+              <p className="text-sm text-muted-foreground mb-8">Final Score</p>
+
+              <div className="w-full max-w-sm space-y-2">
+                {/* Home team row */}
+                <div className="bg-blue-50 dark:bg-blue-950/30 rounded-xl p-4 flex items-center gap-4">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-base truncate">{activeGame.homeTeam.name}</p>
+                    <p className="text-xs text-muted-foreground">Home</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      className="h-10 w-10 rounded-lg border bg-card flex items-center justify-center hover:bg-muted active:scale-95 transition-all"
+                      onClick={() => setHomeScore((p) => Math.max(0, p - 1))}
+                    >
+                      <Minus className="h-4 w-4" />
+                    </button>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={homeScore}
+                      onChange={(e) => setHomeScore(Math.max(0, parseInt(e.target.value) || 0))}
+                      className="w-20 text-center text-3xl font-bold h-14 tabular-nums border-2 rounded-xl"
+                    />
+                    <button
+                      className="h-10 w-10 rounded-lg border bg-card flex items-center justify-center hover:bg-muted active:scale-95 transition-all"
+                      onClick={() => setHomeScore((p) => p + 1)}
+                    >
+                      <Plus className="h-4 w-4" />
+                    </button>
+                  </div>
                 </div>
-                <Input
-                  type="number"
-                  min={0}
-                  value={homeScore}
-                  onChange={(e) => setHomeScore(Math.max(0, parseInt(e.target.value) || 0))}
-                  className="w-24 text-center text-3xl font-bold h-16 tabular-nums"
-                />
+
+                {/* VS divider */}
+                <div className="flex items-center justify-center py-1">
+                  <div className="h-px flex-1 bg-border" />
+                  <span className="px-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">vs</span>
+                  <div className="h-px flex-1 bg-border" />
+                </div>
+
+                {/* Away team row */}
+                <div className="bg-red-50 dark:bg-red-950/30 rounded-xl p-4 flex items-center gap-4">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-base truncate">{activeGame.awayTeam.name}</p>
+                    <p className="text-xs text-muted-foreground">Away</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      className="h-10 w-10 rounded-lg border bg-card flex items-center justify-center hover:bg-muted active:scale-95 transition-all"
+                      onClick={() => setAwayScore((p) => Math.max(0, p - 1))}
+                    >
+                      <Minus className="h-4 w-4" />
+                    </button>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={awayScore}
+                      onChange={(e) => setAwayScore(Math.max(0, parseInt(e.target.value) || 0))}
+                      className="w-20 text-center text-3xl font-bold h-14 tabular-nums border-2 rounded-xl"
+                    />
+                    <button
+                      className="h-10 w-10 rounded-lg border bg-card flex items-center justify-center hover:bg-muted active:scale-95 transition-all"
+                      onClick={() => setAwayScore((p) => p + 1)}
+                    >
+                      <Plus className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
               </div>
 
-              <div className="text-center text-muted-foreground text-sm">vs</div>
-
-              {/* Away team */}
-              <div className="flex items-center gap-4">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{activeGame.awayTeam.name}</p>
-                  <p className="text-[10px] text-muted-foreground">Away</p>
+              {/* Quick winner indicator */}
+              {(homeScore > 0 || awayScore > 0) && homeScore !== awayScore && (
+                <div className="mt-6 flex items-center gap-2">
+                  <Trophy className="h-4 w-4 text-amber-500" />
+                  <span className="text-sm font-medium">
+                    {homeScore > awayScore ? activeGame.homeTeam.name : activeGame.awayTeam.name} wins
+                  </span>
                 </div>
-                <Input
-                  type="number"
-                  min={0}
-                  value={awayScore}
-                  onChange={(e) => setAwayScore(Math.max(0, parseInt(e.target.value) || 0))}
-                  className="w-24 text-center text-3xl font-bold h-16 tabular-nums"
-                />
-              </div>
+              )}
             </div>
           )}
 
-          {/* Sets mode: input per set */}
+          {/* Sets mode: improved layout */}
           {!isGameMode && (
-            <div className="space-y-6">
-              <div className="text-center">
-                <p className="text-sm text-muted-foreground">
-                  {activeGame.homeTeam.name} vs {activeGame.awayTeam.name}
-                </p>
-                <p className="text-2xl font-bold mt-1">
-                  Sets: {homeSetWins} - {awaySetWins}
-                </p>
+            <div className="flex flex-col items-center px-6 py-6">
+              {/* Matchup header */}
+              <div className="text-center mb-6">
+                <div className="flex items-center justify-center gap-3 mb-2">
+                  <span className="text-sm font-semibold text-blue-600 dark:text-blue-400">
+                    {activeGame.homeTeam.name}
+                  </span>
+                  <span className="text-xs text-muted-foreground">vs</span>
+                  <span className="text-sm font-semibold text-red-600 dark:text-red-400">
+                    {activeGame.awayTeam.name}
+                  </span>
+                </div>
+                <div className="flex items-center justify-center gap-4">
+                  <div className={`text-4xl font-bold tabular-nums ${homeSetWins > awaySetWins ? "text-blue-600 dark:text-blue-400" : "text-muted-foreground"}`}>
+                    {homeSetWins}
+                  </div>
+                  <span className="text-lg text-muted-foreground">-</span>
+                  <div className={`text-4xl font-bold tabular-nums ${awaySetWins > homeSetWins ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>
+                    {awaySetWins}
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">Sets Won</p>
               </div>
 
-              <div className="space-y-3">
-                {setScores.map((s, i) => (
-                  <div key={i} className="flex items-center gap-3">
-                    <span className="text-sm font-medium w-12 text-muted-foreground">Set {i + 1}</span>
-                    <Input
-                      type="number"
-                      min={0}
-                      value={s.home || ""}
-                      placeholder="0"
-                      onChange={(e) => {
-                        const next = [...setScores];
-                        next[i] = { ...next[i], home: Math.max(0, parseInt(e.target.value) || 0) };
-                        setSetScores(next);
-                      }}
-                      className="w-20 text-center text-lg font-bold h-12 tabular-nums"
-                    />
-                    <span className="text-muted-foreground">-</span>
-                    <Input
-                      type="number"
-                      min={0}
-                      value={s.away || ""}
-                      placeholder="0"
-                      onChange={(e) => {
-                        const next = [...setScores];
-                        next[i] = { ...next[i], away: Math.max(0, parseInt(e.target.value) || 0) };
-                        setSetScores(next);
-                      }}
-                      className="w-20 text-center text-lg font-bold h-12 tabular-nums"
-                    />
-                    {s.home > 0 || s.away > 0 ? (
-                      <Badge variant={s.home > s.away ? "default" : "secondary"} className="text-[10px] w-12 justify-center">
-                        {s.home > s.away ? "H" : s.away > s.home ? "A" : "Tie"}
-                      </Badge>
-                    ) : (
-                      <div className="w-12" />
-                    )}
+              {/* Set scores grid */}
+              <div className="w-full max-w-sm space-y-3">
+                {/* Header row */}
+                <div className="grid grid-cols-[auto_1fr_auto_1fr_auto] items-center gap-2 px-1">
+                  <div className="w-14" />
+                  <div className="text-center text-xs font-medium text-blue-600 dark:text-blue-400 truncate">
+                    {activeGame.homeTeam.name}
                   </div>
-                ))}
+                  <div />
+                  <div className="text-center text-xs font-medium text-red-600 dark:text-red-400 truncate">
+                    {activeGame.awayTeam.name}
+                  </div>
+                  <div className="w-14" />
+                </div>
+
+                {setScores.map((s, i) => {
+                  const setPlayed = s.home > 0 || s.away > 0;
+                  const homeWon = s.home > s.away;
+                  const awayWon = s.away > s.home;
+                  return (
+                    <div
+                      key={i}
+                      className={`grid grid-cols-[auto_1fr_auto_1fr_auto] items-center gap-2 rounded-xl p-3 transition-colors ${
+                        setPlayed
+                          ? "bg-muted/50"
+                          : "bg-card border border-dashed border-muted-foreground/20"
+                      }`}
+                    >
+                      <span className="text-sm font-medium text-muted-foreground w-14">
+                        Set {i + 1}
+                      </span>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={s.home || ""}
+                        placeholder="0"
+                        onChange={(e) => {
+                          const next = [...setScores];
+                          next[i] = { ...next[i], home: Math.max(0, parseInt(e.target.value) || 0) };
+                          setSetScores(next);
+                        }}
+                        className={`text-center text-xl font-bold h-12 tabular-nums rounded-lg ${
+                          homeWon ? "border-blue-400 bg-blue-50 dark:bg-blue-950/30" : ""
+                        }`}
+                      />
+                      <span className="text-muted-foreground text-center w-4">-</span>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={s.away || ""}
+                        placeholder="0"
+                        onChange={(e) => {
+                          const next = [...setScores];
+                          next[i] = { ...next[i], away: Math.max(0, parseInt(e.target.value) || 0) };
+                          setSetScores(next);
+                        }}
+                        className={`text-center text-xl font-bold h-12 tabular-nums rounded-lg ${
+                          awayWon ? "border-red-400 bg-red-50 dark:bg-red-950/30" : ""
+                        }`}
+                      />
+                      <div className="w-14 flex justify-center">
+                        {setPlayed && (
+                          <Badge
+                            className={`text-[10px] ${
+                              homeWon
+                                ? "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300"
+                                : awayWon
+                                ? "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300"
+                                : "bg-muted text-muted-foreground"
+                            }`}
+                          >
+                            {homeWon ? "H" : awayWon ? "A" : "Tie"}
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
+
+              {/* Winner indicator */}
+              {(homeSetWins > 0 || awaySetWins > 0) && homeSetWins !== awaySetWins && (
+                <div className="mt-6 flex items-center gap-2">
+                  <Trophy className="h-4 w-4 text-amber-500" />
+                  <span className="text-sm font-medium">
+                    {homeSetWins > awaySetWins ? activeGame.homeTeam.name : activeGame.awayTeam.name} leads
+                    {(homeSetWins >= setsToWin || awaySetWins >= setsToWin) ? " — Match!" : ""}
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </div>
 
         {/* Bottom action bar */}
-        <div className="p-4 border-t bg-card">
+        <div className="p-4 border-t bg-card safe-area-pb">
           <Button
-            className="w-full h-12"
+            className="w-full h-12 text-base font-semibold"
             onClick={submitScore}
             disabled={saving || saved}
           >
             {saved ? (
-              <><Check className="h-4 w-4 mr-2" /> Saved!</>
+              <><Check className="h-5 w-5 mr-2" /> Saved!</>
             ) : saving ? (
               "Saving..."
             ) : (
-              <><Check className="h-4 w-4 mr-2" /> Submit Score</>
+              <><Check className="h-5 w-5 mr-2" /> Submit Score</>
             )}
           </Button>
         </div>
