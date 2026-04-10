@@ -16,19 +16,28 @@ import {
   Settings,
 } from "lucide-react";
 import type { Division } from "@/lib/types";
+import type { LeagueRole } from "@/lib/league-role-context";
 import { useUnread } from "@/lib/hooks/use-unread";
 
-const tabs = [
+interface TabDef {
+  suffix: string;
+  label: string;
+  icon: typeof LayoutDashboard;
+  /** If set, only these roles can see this tab */
+  roles?: LeagueRole[];
+}
+
+const tabs: TabDef[] = [
   { suffix: "", label: "Overview", icon: LayoutDashboard },
   { suffix: "/teams", label: "Teams", icon: Users },
   { suffix: "/schedule", label: "Schedule", icon: Calendar },
-  { suffix: "/availability", label: "Availability", icon: ClipboardCheck },
+  { suffix: "/availability", label: "Availability", icon: ClipboardCheck, roles: ["organizer", "staff"] },
   { suffix: "/standings", label: "Standings", icon: Trophy },
   { suffix: "/playoffs", label: "Playoffs", icon: Swords },
   { suffix: "/subs", label: "Subs", icon: UserPlus },
   { suffix: "/chat", label: "Chat", icon: MessageSquare },
-  { suffix: "/payments", label: "Payments", icon: CreditCard },
-  { suffix: "/settings", label: "Settings", icon: Settings },
+  { suffix: "/payments", label: "Payments", icon: CreditCard, roles: ["organizer", "staff"] },
+  { suffix: "/settings", label: "Settings", icon: Settings, roles: ["organizer", "staff"] },
 ];
 
 const LEVEL_COLORS: Record<number, string> = {
@@ -42,9 +51,11 @@ const LEVEL_COLORS: Record<number, string> = {
 export function LeagueNav({
   leagueId,
   divisions = [],
+  role = "organizer",
 }: {
   leagueId: string;
   divisions?: Division[];
+  role?: LeagueRole;
 }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -53,11 +64,13 @@ export function LeagueNav({
   const { leagues: leagueUnread } = useUnread();
   const unreadCount = leagueUnread[leagueId] || 0;
 
+  const visibleTabs = tabs.filter((tab) => !tab.roles || tab.roles.includes(role));
+
   return (
     <div className="space-y-2">
       {/* Primary tab nav */}
       <nav className="flex gap-1 overflow-x-auto border-b pb-px -mb-px">
-        {tabs.map((tab) => {
+        {visibleTabs.map((tab) => {
           const tabPath = `${base}${tab.suffix}`;
           const href = activeDivision
             ? `${tabPath}?division=${activeDivision}`

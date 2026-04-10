@@ -25,19 +25,30 @@ import {
 import { useState } from "react";
 import { useUnread } from "@/lib/hooks/use-unread";
 
-const navItems = [
+/** Items visible to all users */
+const playerItems = [
   { href: "/dashboard", label: "My Leagues", icon: LayoutDashboard },
   { href: "/dashboard/calendar", label: "Calendar", icon: CalendarDays },
   { href: "/dashboard/chats", label: "Chats", icon: MessageSquare },
+  { href: "/dashboard/scoreboard", label: "Scoreboard", icon: Zap },
+];
+
+/** Items only visible to organizers / staff */
+const organizerItems = [
   { href: "/dashboard/locations", label: "Locations", icon: MapPin },
   { href: "/dashboard/open-gym", label: "Open Gym", icon: Dumbbell },
-  { href: "/dashboard/scoreboard", label: "Record Scores", icon: Zap },
   { href: "/dashboard/exports", label: "Exports", icon: Download },
   { href: "/dashboard/leagues/new", label: "New League", icon: Plus },
   { href: "/dashboard/admin", label: "Admin", icon: ShieldCheck },
 ];
 
-export function DashboardSidebar({ profile }: { profile: Profile }) {
+export function DashboardSidebar({
+  profile,
+  isOrganizerOfAny = false,
+}: {
+  profile: Profile;
+  isOrganizerOfAny?: boolean;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -50,6 +61,30 @@ export function DashboardSidebar({ profile }: { profile: Profile }) {
     router.refresh();
   }
 
+  function renderNavItem(item: (typeof playerItems)[0]) {
+    return (
+      <Link
+        key={item.href}
+        href={item.href}
+        onClick={() => setMobileOpen(false)}
+        className={cn(
+          "flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors",
+          pathname === item.href
+            ? "bg-accent text-accent-foreground font-medium"
+            : "text-muted-foreground hover:bg-accent/50"
+        )}
+      >
+        <item.icon className="h-4 w-4" />
+        {item.label}
+        {item.label === "Chats" && totalUnread > 0 && (
+          <span className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-semibold px-1">
+            {totalUnread > 99 ? "99+" : totalUnread}
+          </span>
+        )}
+      </Link>
+    );
+  }
+
   const nav = (
     <>
       <div className="p-4 border-b">
@@ -58,28 +93,38 @@ export function DashboardSidebar({ profile }: { profile: Profile }) {
           <span className="font-semibold text-lg">LeagueNight</span>
         </Link>
       </div>
-      <nav className="flex-1 p-3 space-y-1">
-        {navItems.map((item) => (
-          <Link
-            key={item.href}
-            href={item.href}
-            onClick={() => setMobileOpen(false)}
-            className={cn(
-              "flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors",
-              pathname === item.href
-                ? "bg-accent text-accent-foreground font-medium"
-                : "text-muted-foreground hover:bg-accent/50"
-            )}
-          >
-            <item.icon className="h-4 w-4" />
-            {item.label}
-            {item.label === "Chats" && totalUnread > 0 && (
-              <span className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-semibold px-1">
-                {totalUnread > 99 ? "99+" : totalUnread}
-              </span>
-            )}
-          </Link>
-        ))}
+      <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
+        {playerItems.map(renderNavItem)}
+
+        {/* Organizer section */}
+        {isOrganizerOfAny ? (
+          <>
+            <div className="pt-4 pb-1 px-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+                Organizer Tools
+              </p>
+            </div>
+            {organizerItems.map(renderNavItem)}
+          </>
+        ) : (
+          <>
+            <div className="pt-4 pb-1 px-3">
+              <div className="border-t pt-3">
+                <p className="text-[10px] text-muted-foreground/50 leading-relaxed">
+                  Create your own leagues to access organizer tools
+                </p>
+                <Link
+                  href="/dashboard/leagues/new"
+                  onClick={() => setMobileOpen(false)}
+                  className="flex items-center gap-2 px-3 py-2 mt-1 rounded-md text-sm text-muted-foreground hover:bg-accent/50 transition-colors"
+                >
+                  <Plus className="h-4 w-4" />
+                  New League
+                </Link>
+              </div>
+            </div>
+          </>
+        )}
       </nav>
       <div className="p-3 border-t">
         <div className="flex items-center gap-2 px-3 py-2">

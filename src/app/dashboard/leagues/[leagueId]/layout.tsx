@@ -4,8 +4,10 @@ import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
 import { LeagueNav } from "@/components/dashboard/league-nav";
 import { UpcomingMatchBanner } from "@/components/dashboard/upcoming-match-banner";
+import { LeagueRoleProvider } from "@/lib/league-role-context";
 import { ChevronRight, Home } from "lucide-react";
 import type { League, Division } from "@/lib/types";
+import type { LeagueRole } from "@/lib/league-role-context";
 
 export default async function LeagueLayout({
   children,
@@ -52,42 +54,47 @@ export default async function LeagueLayout({
   const league = leagueRes.data as League;
   const divisions = (divisionsRes.data || []) as Division[];
 
+  // Determine highest role: organizer > staff > player
+  const role: LeagueRole = isOrganizer ? "organizer" : isStaff ? "staff" : "player";
+
   return (
-    <div>
-      {/* Breadcrumb navigation */}
-      <nav className="flex items-center gap-1.5 text-sm text-muted-foreground mb-3">
-        <Link
-          href="/dashboard"
-          className="hover:text-foreground transition-colors flex items-center gap-1"
-        >
-          <Home className="h-3.5 w-3.5" />
-          Dashboard
-        </Link>
-        <ChevronRight className="h-3 w-3" />
-        <span className="text-foreground font-medium">{league.name}</span>
-      </nav>
+    <LeagueRoleProvider role={role}>
+      <div>
+        {/* Breadcrumb navigation */}
+        <nav className="flex items-center gap-1.5 text-sm text-muted-foreground mb-3">
+          <Link
+            href="/dashboard"
+            className="hover:text-foreground transition-colors flex items-center gap-1"
+          >
+            <Home className="h-3.5 w-3.5" />
+            Dashboard
+          </Link>
+          <ChevronRight className="h-3 w-3" />
+          <span className="text-foreground font-medium">{league.name}</span>
+        </nav>
 
-      {/* League header */}
-      <div className="mb-4">
-        <h1 className="text-2xl font-bold">{league.name}</h1>
-        <div className="flex items-center gap-2 mt-0.5">
-          {league.season_name && (
-            <p className="text-muted-foreground text-sm">{league.season_name}</p>
-          )}
-          {league.sport && (
-            <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
-              {league.sport}
-            </span>
-          )}
+        {/* League header */}
+        <div className="mb-4">
+          <h1 className="text-2xl font-bold">{league.name}</h1>
+          <div className="flex items-center gap-2 mt-0.5">
+            {league.season_name && (
+              <p className="text-muted-foreground text-sm">{league.season_name}</p>
+            )}
+            {league.sport && (
+              <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+                {league.sport}
+              </span>
+            )}
+          </div>
         </div>
+
+        {/* Upcoming match banner for team members */}
+        <UpcomingMatchBanner leagueId={leagueId} />
+
+        {/* League sub-nav tabs */}
+        <LeagueNav leagueId={leagueId} divisions={divisions} role={role} />
+        <div className="mt-6">{children}</div>
       </div>
-
-      {/* Upcoming match banner for team members */}
-      <UpcomingMatchBanner leagueId={leagueId} />
-
-      {/* League sub-nav tabs */}
-      <LeagueNav leagueId={leagueId} divisions={divisions} />
-      <div className="mt-6">{children}</div>
-    </div>
+    </LeagueRoleProvider>
   );
 }

@@ -51,12 +51,14 @@ export function TeamsManager({
   initialPlayers,
   divisions = [],
   activeDivisionId,
+  canManage = true,
 }: {
   leagueId: string;
   initialTeams: Team[];
   initialPlayers: Player[];
   divisions?: Division[];
   activeDivisionId?: string;
+  canManage?: boolean;
 }) {
   const [teams, setTeams] = useState(initialTeams);
   const [players, setPlayers] = useState(initialPlayers);
@@ -78,6 +80,10 @@ export function TeamsManager({
   const [editingTeamName, setEditingTeamName] = useState("");
   const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
   const [editingPlayerName, setEditingPlayerName] = useState("");
+
+  // Delete team dialog
+  const [deletingTeamId, setDeletingTeamId] = useState<string | null>(null);
+  const [moveToSubPool, setMoveToSubPool] = useState(true);
 
   const router = useRouter();
 
@@ -194,23 +200,34 @@ export function TeamsManager({
     setEditingTeamName("");
   }
 
-  async function deleteTeam(teamId: string) {
-    if (!confirm("Delete this team? All players will be moved to the sub pool.")) return;
+  async function confirmDeleteTeam() {
+    if (!deletingTeamId) return;
+    const teamId = deletingTeamId;
     const supabase = createClient();
-    // Move players to sub pool first
-    await supabase
-      .from("players")
-      .update({ team_id: null, is_sub: true })
-      .eq("team_id", teamId);
-    const { error } = await supabase.from("teams").delete().eq("id", teamId);
-    if (!error) {
+
+    if (moveToSubPool) {
+      // Move players to sub pool
+      await supabase
+        .from("players")
+        .update({ team_id: null, is_sub: true })
+        .eq("team_id", teamId);
       setPlayers(
         players.map((p) =>
           p.team_id === teamId ? { ...p, team_id: null, is_sub: true } : p
         )
       );
+    } else {
+      // Delete players with the team
+      await supabase.from("players").delete().eq("team_id", teamId);
+      setPlayers(players.filter((p) => p.team_id !== teamId));
+    }
+
+    const { error } = await supabase.from("teams").delete().eq("id", teamId);
+    if (!error) {
       setTeams(teams.filter((t) => t.id !== teamId));
     }
+    setDeletingTeamId(null);
+    setMoveToSubPool(true);
   }
 
   async function movePlayer(playerId: string, newTeamId: string | null) {
@@ -316,7 +333,7 @@ export function TeamsManager({
           </span>
         )}
         <div className="flex items-center gap-1">
-          {teamId && !isEditing && teams.find((t) => t.id === teamId)?.captain_player_id !== player.id && (
+          {canManage && teamId && !isEditing && teams.find((t) => t.id === teamId)?.captain_player_id !== player.id && (
             <Button
               variant="ghost"
               size="sm"
@@ -326,7 +343,7 @@ export function TeamsManager({
               Make captain
             </Button>
           )}
-          {!isEditing && (
+          {canManage && !isEditing && (
             <Button
               variant="ghost"
               size="sm"
@@ -340,7 +357,7 @@ export function TeamsManager({
               )}
             </Button>
           )}
-          {!isEditing && (
+          {canManage && !isEditing && (
             <DropdownMenu>
               <DropdownMenuTrigger>
                 <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
@@ -414,19 +431,21 @@ export function TeamsManager({
 
   return (
     <div className="space-y-6">
-      {/* Add team */}
-      <div className="flex gap-2">
-        <Input
-          placeholder="New team name"
-          value={newTeamName}
-          onChange={(e) => setNewTeamName(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && addTeam()}
-        />
-        <Button onClick={addTeam} disabled={addingTeam}>
-          <Plus className="h-4 w-4 mr-1" />
-          Add Team
-        </Button>
-      </div>
+      {/* Add team — managers only */}
+      {canManage && (
+        <div className="flex gap-2">
+          <Input
+            placeholder="New team name"
+            value={newTeamName}
+            onChange={(e) => setNewTeamName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addTeam()}
+          />
+          <Button onClick={addTeam} disabled={addingTeam}>
+            <Plus className="h-4 w-4 mr-1" />
+            Add Team
+          </Button>
+        </div>
+      )}
 
       {/* Division filter indicator */}
       {activeDivisionName && (
@@ -495,7 +514,7 @@ export function TeamsManager({
                   </span>
                   <div className="flex items-center gap-1 shrink-0">
                     <Badge variant="secondary">{teamPlayers.length} players</Badge>
-                    {!isEditingThisTeam && (
+                    {!isEditingThisTeam && canManage && (
                       <DropdownMenu>
                         <DropdownMenuTrigger>
                           <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
@@ -515,7 +534,7 @@ export function TeamsManager({
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
                             variant="destructive"
-                            onClick={() => deleteTeam(team.id)}
+                            onClick={() => { setDeletingTeamId(team.id); setMoveToSubPool(true); }}
                           >
                             <Trash2 className="h-3.5 w-3.5 mr-1.5" />
                             Delete team
@@ -525,7 +544,7 @@ export function TeamsManager({
                     )}
                   </div>
                 </CardTitle>
-                {divisions.length > 0 && (
+                {divisions.length > 0 && canManage && (
                   <Select
                     value={team.division_id || "none"}
                     onValueChange={(v) =>
@@ -560,8 +579,8 @@ export function TeamsManager({
         })}
       </div>
 
-      {/* Add player dialog */}
-      <Dialog>
+      {/* Add player dialog — managers only */}
+      {canManage && <Dialog>
         <DialogTrigger>
           <Button variant="outline">
             <UserPlus className="h-4 w-4 mr-2" />
@@ -665,7 +684,50 @@ export function TeamsManager({
             </Button>
           </div>
         </DialogContent>
-      </Dialog>
+      </Dialog>}
+
+      {/* Delete team confirmation dialog */}
+      {deletingTeamId && (
+        <Dialog open onOpenChange={(open) => { if (!open) setDeletingTeamId(null); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Delete Team</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 pt-2">
+              <p className="text-sm text-muted-foreground">
+                Are you sure you want to delete{" "}
+                <span className="font-medium text-foreground">
+                  {teams.find((t) => t.id === deletingTeamId)?.name}
+                </span>
+                ? This cannot be undone.
+              </p>
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={moveToSubPool}
+                  onChange={(e) => setMoveToSubPool(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300"
+                />
+                <span className="text-sm">Move players to sub pool</span>
+              </label>
+              {!moveToSubPool && (
+                <p className="text-xs text-destructive">
+                  Players will be permanently removed from the league.
+                </p>
+              )}
+              <div className="flex gap-2 justify-end">
+                <Button variant="outline" onClick={() => setDeletingTeamId(null)}>
+                  Cancel
+                </Button>
+                <Button variant="destructive" onClick={confirmDeleteTeam}>
+                  <Trash2 className="h-4 w-4 mr-1" />
+                  Delete Team
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {/* Sub pool */}
       {subs.length > 0 && (

@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import type { Team, Player, Division } from "@/lib/types";
-import { TeamsManager } from "@/components/dashboard/teams-manager";
+import { TeamsManagerWrapper } from "./teams-wrapper";
 
 export default async function TeamsPage({
   params,
@@ -32,7 +32,7 @@ export default async function TeamsPage({
   ]);
 
   return (
-    <TeamsManager
+    <TeamsManagerWrapper
       leagueId={leagueId}
       initialTeams={(teamsRes.data || []) as Team[]}
       initialPlayers={(playersRes.data || []) as Player[]}

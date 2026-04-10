@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
+  AlertTriangle,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -21,9 +22,24 @@ import {
   Maximize,
   Minimize,
   X,
+  ThumbsUp,
+  ThumbsDown,
 } from "lucide-react";
 import { format, isToday, isTomorrow, isYesterday, addDays, subDays } from "date-fns";
 import type { Game, Team, League, LeagueSettings } from "@/lib/types";
+
+interface ScoreSubmission {
+  id: string;
+  game_id: string;
+  league_id: string;
+  submitted_by: string;
+  home_score: number;
+  away_score: number;
+  set_scores: { home: number; away: number }[] | null;
+  status: "pending" | "accepted" | "rejected";
+  created_at: string;
+  profiles?: { full_name: string } | null;
+}
 
 interface GameWithMeta extends Game {
   homeTeam: Team;
@@ -69,6 +85,12 @@ export default function ScoreboardPage() {
   const [scoringMode, setScoringMode] = useState<ScoringMode>("input");
   const [isFullscreen, setIsFullscreen] = useState(false);
 
+  // Role tracking: which leagues can this user manage (organizer/staff)
+  const [manageableLeagueIds, setManageableLeagueIds] = useState<Set<string>>(new Set());
+  // Pending score submissions for review
+  const [pendingSubmissions, setPendingSubmissions] = useState<ScoreSubmission[]>([]);
+  const [reviewingSubmission, setReviewingSubmission] = useState<ScoreSubmission | null>(null);
+
   const isTouch = useIsTouchDevice();
   const canFullscreen = useCanFullscreen();
   const liveContainerRef = useRef<HTMLDivElement>(null);
@@ -113,10 +135,11 @@ export default function ScoreboardPage() {
 
     const owned = (ownedRes.data || []) as League[];
     const staffLeagues = (staffRes.data || []).map((s: any) => s.leagues).filter(Boolean) as League[];
-    const knownIds = new Set([...owned.map(l => l.id), ...staffLeagues.map(l => l.id)]);
+    const manageable = new Set([...owned.map(l => l.id), ...staffLeagues.map(l => l.id)]);
+    setManageableLeagueIds(manageable);
     const playerLeagues = (playerRes.data || [])
       .map((p: any) => p.leagues)
-      .filter((l: any) => l && !knownIds.has(l.id)) as League[];
+      .filter((l: any) => l && !manageable.has(l.id)) as League[];
     const leagues: League[] = [...owned, ...staffLeagues, ...playerLeagues];
     const leagueMap = new Map(leagues.map((l) => [l.id, l]));
     const leagueIds = [...leagueMap.keys()];
@@ -152,6 +175,18 @@ export default function ScoreboardPage() {
     }
 
     setAllGames(enriched);
+
+    // Load pending score submissions for leagues this user manages
+    if (manageable.size > 0) {
+      const { data: subs } = await supabase
+        .from("score_submissions")
+        .select("*, profiles:submitted_by(full_name)")
+        .in("league_id", [...manageable])
+        .eq("status", "pending")
+        .order("created_at", { ascending: false });
+      setPendingSubmissions((subs || []) as ScoreSubmission[]);
+    }
+
     setLoading(false);
   }
 
@@ -195,11 +230,12 @@ export default function ScoreboardPage() {
   }
 
   async function submitScore() {
-    if (!activeGame) return;
+    if (!activeGame || !profileId) return;
     setSaving(true);
 
     const supabase = createClient();
     const gameMode = activeGame.settings.scoring_mode || "game";
+    const canManageGame = manageableLeagueIds.has(activeGame.league_id);
 
     let finalHome = homeScore;
     let finalAway = awayScore;
@@ -215,31 +251,87 @@ export default function ScoreboardPage() {
       finalAway = aWins;
     }
 
-    const { error } = await supabase.from("games").update({
-      home_score: finalHome, away_score: finalAway, status: "completed",
-    }).eq("id", activeGame.id);
+    if (canManageGame) {
+      // Staff/organizer: directly update the game
+      const { error } = await supabase.from("games").update({
+        home_score: finalHome, away_score: finalAway, status: "completed",
+      }).eq("id", activeGame.id);
 
-    if (!error) {
-      await supabase.rpc("recalculate_standings", { p_league_id: activeGame.league_id });
-      setAllGames((prev) =>
-        prev.map((g) =>
-          g.id === activeGame.id
-            ? { ...g, home_score: finalHome, away_score: finalAway, status: "completed" as const }
-            : g
-        )
-      );
-      setSaved(true);
-      setTimeout(() => {
-        setView("list");
-        setActiveGame(null);
-        setSaved(false);
-        // Exit fullscreen if active
-        if (document.fullscreenElement) {
-          document.exitFullscreen().catch(() => {});
-        }
-      }, 1200);
+      if (!error) {
+        await supabase.rpc("recalculate_standings", { p_league_id: activeGame.league_id });
+        setAllGames((prev) =>
+          prev.map((g) =>
+            g.id === activeGame.id
+              ? { ...g, home_score: finalHome, away_score: finalAway, status: "completed" as const }
+              : g
+          )
+        );
+      }
+    } else {
+      // Player: submit for review
+      await supabase.from("score_submissions").insert({
+        game_id: activeGame.id,
+        league_id: activeGame.league_id,
+        submitted_by: profileId,
+        home_score: finalHome,
+        away_score: finalAway,
+        set_scores: gameMode === "sets" ? setScores : null,
+      });
     }
+
+    setSaved(true);
+    setTimeout(() => {
+      setView("list");
+      setActiveGame(null);
+      setSaved(false);
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      }
+    }, 1200);
     setSaving(false);
+  }
+
+  async function acceptSubmission(sub: ScoreSubmission) {
+    const supabase = createClient();
+
+    // Update game with submitted score
+    await supabase.from("games").update({
+      home_score: sub.home_score,
+      away_score: sub.away_score,
+      status: "completed",
+    }).eq("id", sub.game_id);
+
+    // Mark submission as accepted
+    await supabase.from("score_submissions").update({
+      status: "accepted",
+      reviewed_by: profileId,
+      reviewed_at: new Date().toISOString(),
+    }).eq("id", sub.id);
+
+    // Recalculate standings
+    await supabase.rpc("recalculate_standings", { p_league_id: sub.league_id });
+
+    // Update local state
+    setAllGames((prev) =>
+      prev.map((g) =>
+        g.id === sub.game_id
+          ? { ...g, home_score: sub.home_score, away_score: sub.away_score, status: "completed" as const }
+          : g
+      )
+    );
+    setPendingSubmissions((prev) => prev.filter((s) => s.id !== sub.id));
+    setReviewingSubmission(null);
+  }
+
+  async function rejectSubmission(subId: string) {
+    const supabase = createClient();
+    await supabase.from("score_submissions").update({
+      status: "rejected",
+      reviewed_by: profileId,
+      reviewed_at: new Date().toISOString(),
+    }).eq("id", subId);
+    setPendingSubmissions((prev) => prev.filter((s) => s.id !== subId));
+    setReviewingSubmission(null);
   }
 
   function toggleFullscreen() {
@@ -256,6 +348,9 @@ export default function ScoreboardPage() {
     const gameMode = activeGame.settings.scoring_mode || "game";
     const setsToWin = activeGame.settings.sets_to_win || 2;
     const isGameMode = gameMode === "game";
+    const canManageGame = manageableLeagueIds.has(activeGame.league_id);
+    const submitLabel = canManageGame ? "Submit Final" : "Submit for Review";
+    const savedLabel = canManageGame ? "Saved!" : "Sent for Review!";
 
     let homeSetWins = 0, awaySetWins = 0;
     if (!isGameMode) {
@@ -493,11 +588,11 @@ export default function ScoreboardPage() {
               disabled={saving || saved}
             >
               {saved ? (
-                <><Check className="h-5 w-5 mr-2" /> Saved!</>
+                <><Check className="h-5 w-5 mr-2" /> {savedLabel}</>
               ) : saving ? (
                 "Saving..."
               ) : (
-                <><Check className="h-5 w-5 mr-2" /> Submit Final</>
+                <><Check className="h-5 w-5 mr-2" /> {submitLabel}</>
               )}
             </Button>
           </div>
@@ -748,11 +843,11 @@ export default function ScoreboardPage() {
             disabled={saving || saved}
           >
             {saved ? (
-              <><Check className="h-5 w-5 mr-2" /> Saved!</>
+              <><Check className="h-5 w-5 mr-2" /> {savedLabel}</>
             ) : saving ? (
               "Saving..."
             ) : (
-              <><Check className="h-5 w-5 mr-2" /> Submit Score</>
+              <><Check className="h-5 w-5 mr-2" /> {canManageGame ? "Submit Score" : "Submit for Review"}</>
             )}
           </Button>
         </div>
@@ -802,6 +897,61 @@ export default function ScoreboardPage() {
           onClick={() => setSelectedDate(new Date())}>
           Jump to Today
         </Button>
+      )}
+
+      {/* Pending score submissions banner — for organizers/staff */}
+      {pendingSubmissions.length > 0 && (
+        <Card className="border-amber-300 bg-amber-50 dark:bg-amber-950/20">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+              <h2 className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+                Scores Pending Review ({pendingSubmissions.length})
+              </h2>
+            </div>
+            <div className="space-y-2">
+              {pendingSubmissions.map((sub) => {
+                const game = allGames.find((g) => g.id === sub.game_id);
+                return (
+                  <div
+                    key={sub.id}
+                    className="flex items-center justify-between bg-white dark:bg-card rounded-lg p-3 border"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">
+                        {game
+                          ? `${game.homeTeam.name} ${sub.home_score} - ${sub.away_score} ${game.awayTeam.name}`
+                          : `${sub.home_score} - ${sub.away_score}`}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Submitted by {(sub.profiles as any)?.full_name || "player"}
+                        {" · "}
+                        {format(new Date(sub.created_at), "h:mm a")}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1 ml-2 shrink-0">
+                      <Button
+                        size="sm"
+                        className="h-8 bg-green-600 hover:bg-green-700 text-white"
+                        onClick={() => acceptSubmission(sub)}
+                      >
+                        <ThumbsUp className="h-3.5 w-3.5 mr-1" /> Accept
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8"
+                        onClick={() => rejectSubmission(sub.id)}
+                      >
+                        <ThumbsDown className="h-3.5 w-3.5 mr-1" /> Reject
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Games needing scores */}

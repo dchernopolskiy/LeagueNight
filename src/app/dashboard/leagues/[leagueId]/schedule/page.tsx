@@ -39,6 +39,7 @@ import {
 import { format } from "date-fns";
 import { generateSchedulePdf } from "@/lib/export/schedule-pdf";
 import type { Game, Team, GameDayPattern, League, Player, Location, LocationUnavailability } from "@/lib/types";
+import { useLeagueRole } from "@/lib/league-role-context";
 
 const DAYS = [
   "Sunday",
@@ -103,6 +104,7 @@ function formatYMD(d: Date): string {
 
 export default function SchedulePage() {
   const { leagueId } = useParams<{ leagueId: string }>();
+  const { canManage } = useLeagueRole();
   const searchParams = useSearchParams();
   const activeDivisionId = searchParams.get("division");
   const [games, setGames] = useState<Game[]>([]);
@@ -684,12 +686,16 @@ export default function SchedulePage() {
                 onChange={(e) => setNewSkipDate(e.target.value)}
                 className="h-8 w-48"
               />
-              <Button variant="outline" size="sm" onClick={addSkipDate} disabled={!newSkipDate}>
-                Add
-              </Button>
-              <Button variant="outline" size="sm" onClick={addCommonHolidays}>
-                Add common holidays
-              </Button>
+              {canManage && (
+                <Button variant="outline" size="sm" onClick={addSkipDate} disabled={!newSkipDate}>
+                  Add
+                </Button>
+              )}
+              {canManage && (
+                <Button variant="outline" size="sm" onClick={addCommonHolidays}>
+                  Add common holidays
+                </Button>
+              )}
             </div>
             {skipDates.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
@@ -747,94 +753,98 @@ export default function SchedulePage() {
                     </div>
                   )}
                 </div>
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 w-8 p-0 text-muted-foreground"
-                    onClick={() => openEditPattern(p)}
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
-                    onClick={() => setConfirmDeletePattern(p.id)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    onClick={() => handleGenerateClick(p.id)}
-                    disabled={generating || teams.length < 2}
-                    size="sm"
-                  >
-                    <Zap className="h-4 w-4 mr-1" />
-                    {generating ? "Generating..." : "Generate"}
-                  </Button>
-                </div>
+                {canManage && (
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 w-8 p-0 text-muted-foreground"
+                      onClick={() => openEditPattern(p)}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
+                      onClick={() => setConfirmDeletePattern(p.id)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      onClick={() => handleGenerateClick(p.id)}
+                      disabled={generating || teams.length < 2}
+                      size="sm"
+                    >
+                      <Zap className="h-4 w-4 mr-1" />
+                      {generating ? "Generating..." : "Generate"}
+                    </Button>
+                  </div>
+                )}
               </div>
             );
           })}
 
-          <Dialog>
-            <DialogTrigger>
-              <Button variant="outline" size="sm">
-                Add Game Day
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Set Up Game Day</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4 pt-2">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Day of week</Label>
-                    <Select value={dayOfWeek} onValueChange={(v) => v && setDayOfWeek(v)}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {DAYS.map((day, i) => (
-                          <SelectItem key={i} value={i.toString()}>
-                            {day}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Start time</Label>
-                    <Input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
-                  </div>
-                </div>
-                {renderLocationCheckboxes(selectedLocationIds, toggleLocationId)}
-                <div className="space-y-2">
-                  <Label>Venue override</Label>
-                  <Input
-                    value={venue}
-                    onChange={(e) => setVenue(e.target.value)}
-                    placeholder={selectedLocationIds.length > 0 ? "Override location name" : "South Sound YMCA"}
-                  />
-                </div>
-                {renderDurationSelect(durationMinutes, setDurationMinutes)}
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>First game date</Label>
-                    <Input type="date" value={startsOn} onChange={(e) => setStartsOn(e.target.value)} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Last game date (optional)</Label>
-                    <Input type="date" value={endsOn} onChange={(e) => setEndsOn(e.target.value)} />
-                  </div>
-                </div>
-                <Button onClick={addPattern} disabled={addingPattern || !startsOn} className="w-full">
-                  {addingPattern ? "Saving..." : "Save Game Day"}
+          {canManage && (
+            <Dialog>
+              <DialogTrigger>
+                <Button variant="outline" size="sm">
+                  Add Game Day
                 </Button>
-              </div>
-            </DialogContent>
-          </Dialog>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Set Up Game Day</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4 pt-2">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Day of week</Label>
+                      <Select value={dayOfWeek} onValueChange={(v) => v && setDayOfWeek(v)}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {DAYS.map((day, i) => (
+                            <SelectItem key={i} value={i.toString()}>
+                              {day}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Start time</Label>
+                      <Input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+                    </div>
+                  </div>
+                  {renderLocationCheckboxes(selectedLocationIds, toggleLocationId)}
+                  <div className="space-y-2">
+                    <Label>Venue override</Label>
+                    <Input
+                      value={venue}
+                      onChange={(e) => setVenue(e.target.value)}
+                      placeholder={selectedLocationIds.length > 0 ? "Override location name" : "South Sound YMCA"}
+                    />
+                  </div>
+                  {renderDurationSelect(durationMinutes, setDurationMinutes)}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>First game date</Label>
+                      <Input type="date" value={startsOn} onChange={(e) => setStartsOn(e.target.value)} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Last game date (optional)</Label>
+                      <Input type="date" value={endsOn} onChange={(e) => setEndsOn(e.target.value)} />
+                    </div>
+                  </div>
+                  <Button onClick={addPattern} disabled={addingPattern || !startsOn} className="w-full">
+                    {addingPattern ? "Saving..." : "Save Game Day"}
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          )}
         </CardContent>
       </Card>
 
@@ -1060,7 +1070,7 @@ export default function SchedulePage() {
                               <Badge>
                                 {game.home_score} - {game.away_score}
                               </Badge>
-                            ) : (
+                            ) : canManage ? (
                               <>
                                 <Button
                                   variant="ghost"
@@ -1079,7 +1089,7 @@ export default function SchedulePage() {
                                   <X className="h-3 w-3" />
                                 </Button>
                               </>
-                            )}
+                            ) : null}
                           </div>
                         </div>
                       );
@@ -1099,16 +1109,18 @@ export default function SchedulePage() {
                 <AlertTriangle className="h-4 w-4" />
                 Location Conflicts ({conflictedGames.length})
               </CardTitle>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={applyAllSuggestions}
-                disabled={applyingAll}
-                className="border-amber-300 text-amber-700 hover:bg-amber-100"
-              >
-                <Zap className="h-3.5 w-3.5 mr-1" />
-                {applyingAll ? "Applying..." : "Apply All Suggestions"}
-              </Button>
+              {canManage && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={applyAllSuggestions}
+                  disabled={applyingAll}
+                  className="border-amber-300 text-amber-700 hover:bg-amber-100"
+                >
+                  <Zap className="h-3.5 w-3.5 mr-1" />
+                  {applyingAll ? "Applying..." : "Apply All Suggestions"}
+                </Button>
+              )}
             </div>
             <p className="text-xs text-amber-600 mt-1">
               These games are scheduled at locations that are unavailable on their game dates.
@@ -1154,71 +1166,73 @@ export default function SchedulePage() {
                     </div>
                   )}
 
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <div className="flex items-center gap-1.5">
-                      <Select
-                        value={conflictMoveTargets[game.id] || ""}
-                        onValueChange={(v) =>
-                          v && setConflictMoveTargets((prev) => ({ ...prev, [game.id]: v }))
-                        }
-                      >
-                        <SelectTrigger className="h-7 text-xs w-40">
-                          <SelectValue placeholder="Pick location" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {availableLocations.map((loc) => (
-                            <SelectItem key={loc.id} value={loc.id} label={loc.name}>
-                              {loc.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                  {canManage && (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="flex items-center gap-1.5">
+                        <Select
+                          value={conflictMoveTargets[game.id] || ""}
+                          onValueChange={(v) =>
+                            v && setConflictMoveTargets((prev) => ({ ...prev, [game.id]: v }))
+                          }
+                        >
+                          <SelectTrigger className="h-7 text-xs w-40">
+                            <SelectValue placeholder="Pick location" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {availableLocations.map((loc) => (
+                              <SelectItem key={loc.id} value={loc.id} label={loc.name}>
+                                {loc.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs"
+                          disabled={!conflictMoveTargets[game.id]}
+                          onClick={() => moveGameToLocation(game.id, conflictMoveTargets[game.id])}
+                        >
+                          <MapPin className="h-3 w-3 mr-1" />
+                          Move
+                        </Button>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <Input
+                          type="date"
+                          className="h-7 text-xs w-36"
+                          value={conflictRescheduleDates[game.id] || ""}
+                          onChange={(e) =>
+                            setConflictRescheduleDates((prev) => ({
+                              ...prev,
+                              [game.id]: e.target.value,
+                            }))
+                          }
+                        />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs"
+                          disabled={!conflictRescheduleDates[game.id]}
+                          onClick={() => rescheduleGame(game.id, conflictRescheduleDates[game.id])}
+                        >
+                          <CalendarX2 className="h-3 w-3 mr-1" />
+                          Reschedule
+                        </Button>
+                      </div>
+
                       <Button
                         variant="outline"
                         size="sm"
-                        className="h-7 text-xs"
-                        disabled={!conflictMoveTargets[game.id]}
-                        onClick={() => moveGameToLocation(game.id, conflictMoveTargets[game.id])}
+                        className="h-7 text-xs text-destructive hover:bg-destructive/10 border-destructive/30"
+                        onClick={() => cancelConflictedGame(game.id)}
                       >
-                        <MapPin className="h-3 w-3 mr-1" />
-                        Move
+                        <X className="h-3 w-3 mr-1" />
+                        Cancel
                       </Button>
                     </div>
-
-                    <div className="flex items-center gap-1.5">
-                      <Input
-                        type="date"
-                        className="h-7 text-xs w-36"
-                        value={conflictRescheduleDates[game.id] || ""}
-                        onChange={(e) =>
-                          setConflictRescheduleDates((prev) => ({
-                            ...prev,
-                            [game.id]: e.target.value,
-                          }))
-                        }
-                      />
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-7 text-xs"
-                        disabled={!conflictRescheduleDates[game.id]}
-                        onClick={() => rescheduleGame(game.id, conflictRescheduleDates[game.id])}
-                      >
-                        <CalendarX2 className="h-3 w-3 mr-1" />
-                        Reschedule
-                      </Button>
-                    </div>
-
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-xs text-destructive hover:bg-destructive/10 border-destructive/30"
-                      onClick={() => cancelConflictedGame(game.id)}
-                    >
-                      <X className="h-3 w-3 mr-1" />
-                      Cancel
-                    </Button>
-                  </div>
+                  )}
                 </div>
               );
             })}

@@ -100,15 +100,46 @@ export default function ChatPage() {
   const [announcementStatus, setAnnouncementStatus] = useState<string | null>(null);
   const { channels: channelUnread, markRead } = useUnread();
 
+  // Find the player's team(s) and division(s)
+  const myPlayerRecord = useMemo(() => {
+    if (!currentPlayerId) return null;
+    return players.find((p) => p.id === currentPlayerId) || null;
+  }, [currentPlayerId, players]);
+
+  const myTeamIds = useMemo(() => {
+    if (!currentPlayerId) return new Set<string>();
+    return new Set(
+      players
+        .filter((p) => p.profile_id === myPlayerRecord?.profile_id && p.team_id)
+        .map((p) => p.team_id!)
+    );
+  }, [currentPlayerId, myPlayerRecord, players]);
+
+  const myDivisionIds = useMemo(() => {
+    const divIds = new Set<string>();
+    for (const tid of myTeamIds) {
+      const team = teams.find((t) => t.id === tid);
+      if (team?.division_id) divIds.add(team.division_id);
+    }
+    return divIds;
+  }, [myTeamIds, teams]);
+
   // Build channel list
   const channels = useMemo<Channel[]>(() => {
-    const list: Channel[] = [
-      { key: "league", label: "League Chat", type: "league", teamId: null, divisionId: null, icon: Hash, section: "General" },
-      { key: "organizer", label: "Organizer", type: "organizer", teamId: null, divisionId: null, icon: Shield, section: "General" },
-    ];
+    const list: Channel[] = [];
+
+    // League chat — always visible
+    list.push({ key: "league", label: "League Chat", type: "league", teamId: null, divisionId: null, icon: Hash, section: "General" });
+
+    // Organizer channel — only for organizers/staff
+    if (isOrganizer) {
+      list.push({ key: "organizer", label: "Organizer", type: "organizer", teamId: null, divisionId: null, icon: Shield, section: "General" });
+    }
 
     // Division channels
     for (const div of divisions) {
+      // Players only see their own division
+      if (!isOrganizer && !myDivisionIds.has(div.id)) continue;
       list.push({
         key: `division-${div.id}`,
         label: div.name,
@@ -122,6 +153,8 @@ export default function ChatPage() {
 
     // Team channels
     for (const team of teams) {
+      // Players only see their own team
+      if (!isOrganizer && !myTeamIds.has(team.id)) continue;
       list.push({
         key: `team-${team.id}`,
         label: team.name,
@@ -135,7 +168,6 @@ export default function ChatPage() {
 
     // Direct messages (captain ↔ organizer) — only show if current user is a captain or organizer
     if (isOrganizer) {
-      // Show DM channels for each team captain
       for (const team of teams) {
         if (team.captain_player_id) {
           const captain = players.find((p) => p.id === team.captain_player_id);
@@ -153,7 +185,6 @@ export default function ChatPage() {
         }
       }
     } else if (currentPlayerId) {
-      // Check if current player is a captain
       const myTeam = teams.find((t) => t.captain_player_id === currentPlayerId);
       if (myTeam) {
         list.push({
@@ -169,7 +200,7 @@ export default function ChatPage() {
     }
 
     return list;
-  }, [teams, divisions, players, currentPlayerId, isOrganizer]);
+  }, [teams, divisions, players, currentPlayerId, isOrganizer, myTeamIds, myDivisionIds]);
 
   const activeChannel = useMemo(() => {
     if (selectedChannelKey) {

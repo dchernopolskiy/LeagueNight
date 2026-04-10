@@ -33,6 +33,7 @@ import {
   X,
 } from "lucide-react";
 import { format } from "date-fns";
+import { useLeagueRole } from "@/lib/league-role-context";
 import type {
   Bracket,
   BracketSlot,
@@ -57,6 +58,7 @@ interface Matchup {
 // ── Main Page ────────────────────────────────────────────────────────
 export default function PlayoffsPage() {
   const { leagueId } = useParams<{ leagueId: string }>();
+  const { canManage } = useLeagueRole();
 
   const [brackets, setBrackets] = useState<Bracket[]>([]);
   const [allSlots, setAllSlots] = useState<Map<string, BracketSlot[]>>(
@@ -288,149 +290,151 @@ export default function PlayoffsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Playoff Brackets</h2>
-        <Dialog open={showForm} onOpenChange={setShowForm}>
-          <DialogTrigger render={<Button size="sm" />}>
-            <Plus className="h-4 w-4 mr-1" />
-            New Bracket
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Generate Playoff Bracket</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4 pt-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="bracket-name">Bracket Name</Label>
-                <Input
-                  id="bracket-name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g., Championship, Consolation"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
+        {canManage && (
+          <Dialog open={showForm} onOpenChange={setShowForm}>
+            <DialogTrigger render={<Button size="sm" />}>
+              <Plus className="h-4 w-4 mr-1" />
+              New Bracket
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Generate Playoff Bracket</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4 pt-2">
                 <div className="space-y-1.5">
-                  <Label>Total Teams</Label>
+                  <Label htmlFor="bracket-name">Bracket Name</Label>
                   <Input
-                    type="number"
-                    min={2}
-                    max={Math.max(availableTeams, 2)}
-                    value={numTeams}
-                    onChange={(e) => setNumTeams(e.target.value)}
+                    id="bracket-name"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="e.g., Championship, Consolation"
                   />
-                  <p className="text-xs text-muted-foreground">
-                    {availableTeams} with standings
-                  </p>
                 </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label>Total Teams</Label>
+                    <Input
+                      type="number"
+                      min={2}
+                      max={Math.max(availableTeams, 2)}
+                      value={numTeams}
+                      onChange={(e) => setNumTeams(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {availableTeams} with standings
+                    </p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Teams Per Bracket</Label>
+                    <Select
+                      value={teamsPerBracket}
+                      onValueChange={(v) => v && setTeamsPerBracket(v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="2">2 (Finals)</SelectItem>
+                        <SelectItem value="3">3 (Round Robin)</SelectItem>
+                        <SelectItem value="4">4</SelectItem>
+                        <SelectItem value="6">6</SelectItem>
+                        <SelectItem value="8">8</SelectItem>
+                        <SelectItem value="16">16</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Creates{" "}
+                      {Math.ceil(parseInt(numTeams) / parseInt(teamsPerBracket))}{" "}
+                      bracket{Math.ceil(parseInt(numTeams) / parseInt(teamsPerBracket)) > 1 ? "s" : ""}
+                    </p>
+                  </div>
+                </div>
+
                 <div className="space-y-1.5">
-                  <Label>Teams Per Bracket</Label>
+                  <Label>Format</Label>
                   <Select
-                    value={teamsPerBracket}
-                    onValueChange={(v) => v && setTeamsPerBracket(v)}
+                    value={bracketFormat}
+                    onValueChange={(v) =>
+                      v &&
+                      setBracketFormat(
+                        v as "single_elimination" | "double_elimination"
+                      )
+                    }
                   >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="2">2 (Finals)</SelectItem>
-                      <SelectItem value="3">3 (Round Robin)</SelectItem>
-                      <SelectItem value="4">4</SelectItem>
-                      <SelectItem value="6">6</SelectItem>
-                      <SelectItem value="8">8</SelectItem>
-                      <SelectItem value="16">16</SelectItem>
+                      <SelectItem value="single_elimination">
+                        Single Elimination
+                      </SelectItem>
+                      <SelectItem value="double_elimination">
+                        Double Elimination (Loser Bracket)
+                      </SelectItem>
                     </SelectContent>
                   </Select>
-                  <p className="text-xs text-muted-foreground">
-                    Creates{" "}
-                    {Math.ceil(parseInt(numTeams) / parseInt(teamsPerBracket))}{" "}
-                    bracket{Math.ceil(parseInt(numTeams) / parseInt(teamsPerBracket)) > 1 ? "s" : ""}
-                  </p>
                 </div>
-              </div>
 
-              <div className="space-y-1.5">
-                <Label>Format</Label>
-                <Select
-                  value={bracketFormat}
-                  onValueChange={(v) =>
-                    v &&
-                    setBracketFormat(
-                      v as "single_elimination" | "double_elimination"
-                    )
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="single_elimination">
-                      Single Elimination
-                    </SelectItem>
-                    <SelectItem value="double_elimination">
-                      Double Elimination (Loser Bracket)
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label>Seed By</Label>
-                <Select
-                  value={seedBy}
-                  onValueChange={(v) =>
-                    v && setSeedBy(v as "record" | "points")
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="record">Record (W-L)</SelectItem>
-                    <SelectItem value="points">Points For</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  Top seeds play bottom seeds. Score-matched grouping across
-                  brackets.
-                </p>
-              </div>
-
-              {divisions.length > 0 && (
                 <div className="space-y-1.5">
-                  <Label>Division (optional)</Label>
+                  <Label>Seed By</Label>
                   <Select
-                    value={divisionId || "all"}
+                    value={seedBy}
                     onValueChange={(v) =>
-                      v && setDivisionId(v === "all" ? "" : v)
+                      v && setSeedBy(v as "record" | "points")
                     }
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="All divisions" />
+                      <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">All divisions</SelectItem>
-                      {divisions.map((d) => (
-                        <SelectItem key={d.id} value={d.id} label={d.name}>
-                          {d.name}
-                        </SelectItem>
-                      ))}
+                      <SelectItem value="record">Record (W-L)</SelectItem>
+                      <SelectItem value="points">Points For</SelectItem>
                     </SelectContent>
                   </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Top seeds play bottom seeds. Score-matched grouping across
+                    brackets.
+                  </p>
                 </div>
-              )}
 
-              <Button
-                onClick={handleGenerate}
-                disabled={
-                  generating || !name || !numTeams || parseInt(numTeams) < 2
-                }
-                className="w-full"
-              >
-                {generating ? "Generating..." : "Generate Bracket"}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+                {divisions.length > 0 && (
+                  <div className="space-y-1.5">
+                    <Label>Division (optional)</Label>
+                    <Select
+                      value={divisionId || "all"}
+                      onValueChange={(v) =>
+                        v && setDivisionId(v === "all" ? "" : v)
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="All divisions" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All divisions</SelectItem>
+                        {divisions.map((d) => (
+                          <SelectItem key={d.id} value={d.id} label={d.name}>
+                            {d.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                <Button
+                  onClick={handleGenerate}
+                  disabled={
+                    generating || !name || !numTeams || parseInt(numTeams) < 2
+                  }
+                  className="w-full"
+                >
+                  {generating ? "Generating..." : "Generate Bracket"}
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        )}
       </div>
 
       {/* Brackets */}
@@ -483,14 +487,16 @@ export default function PlayoffsPage() {
                     >
                       <Download className="h-4 w-4" />
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                      onClick={() => deleteBracket(bracket.id)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    {canManage && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                        onClick={() => deleteBracket(bracket.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
                   </div>
                 </div>
               </CardHeader>
@@ -502,6 +508,7 @@ export default function PlayoffsPage() {
                     teamsMap={teamsMap}
                     gamesMap={gamesMap}
                     format={bracket.format}
+                    canManage={canManage}
                     scoringGame={scoringGame}
                     homeScore={homeScore}
                     awayScore={awayScore}
@@ -537,6 +544,7 @@ function BracketView({
   teamsMap,
   gamesMap,
   format,
+  canManage,
   scoringGame,
   homeScore,
   awayScore,
@@ -550,6 +558,7 @@ function BracketView({
   teamsMap: Map<string, Team>;
   gamesMap: Map<string, Game>;
   format: "single_elimination" | "double_elimination";
+  canManage: boolean;
   scoringGame: string | null;
   homeScore: string;
   awayScore: string;
@@ -659,6 +668,7 @@ function BracketView({
             roundNums={wbRounds}
             matchupsByRound={wbMatchups}
             teamsMap={teamsMap}
+            canManage={canManage}
             labelFn={(r) =>
               format === "single_elimination"
                 ? wbRounds.indexOf(r) === wbRounds.length - 1
@@ -688,6 +698,7 @@ function BracketView({
             roundNums={lbRounds}
             matchupsByRound={lbMatchups}
             teamsMap={teamsMap}
+            canManage={canManage}
             labelFn={(r) => roundLabel(r, lbRounds, "L")}
             scoringGame={scoringGame}
             homeScore={homeScore}
@@ -715,6 +726,7 @@ function BracketView({
             roundNums={gfRounds}
             matchupsByRound={gfMatchups}
             teamsMap={teamsMap}
+            canManage={canManage}
             labelFn={() => "Championship"}
             scoringGame={scoringGame}
             homeScore={homeScore}
@@ -737,6 +749,7 @@ function RoundColumns({
   roundNums,
   matchupsByRound,
   teamsMap,
+  canManage,
   labelFn,
   scoringGame,
   homeScore,
@@ -750,6 +763,7 @@ function RoundColumns({
   roundNums: number[];
   matchupsByRound: Map<number, Matchup[]>;
   teamsMap: Map<string, Team>;
+  canManage: boolean;
   labelFn: (round: number) => string;
   scoringGame: string | null;
   homeScore: string;
@@ -789,6 +803,7 @@ function RoundColumns({
                   key={m.id}
                   matchup={m}
                   teamsMap={teamsMap}
+                  canManage={canManage}
                   isScoring={scoringGame === m.game?.id}
                   homeScore={homeScore}
                   awayScore={awayScore}
@@ -812,6 +827,7 @@ function RoundColumns({
 function MatchupCard({
   matchup,
   teamsMap,
+  canManage,
   isScoring,
   homeScore,
   awayScore,
@@ -823,6 +839,7 @@ function MatchupCard({
 }: {
   matchup: Matchup;
   teamsMap: Map<string, Team>;
+  canManage: boolean;
   isScoring: boolean;
   homeScore: string;
   awayScore: string;
@@ -925,7 +942,7 @@ function MatchupCard({
       </div>
 
       {/* Score entry / action bar */}
-      {game && !isCompleted && topTeam && bottomTeam && (
+      {canManage && game && !isCompleted && topTeam && bottomTeam && (
         <div className="border-t bg-muted/30 px-2.5 py-1.5">
           {isScoring ? (
             <div className="flex items-center gap-1">
