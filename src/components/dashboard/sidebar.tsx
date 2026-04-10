@@ -30,7 +30,7 @@ const playerItems = [
   { href: "/dashboard", label: "My Leagues", icon: LayoutDashboard },
   { href: "/dashboard/calendar", label: "Calendar", icon: CalendarDays },
   { href: "/dashboard/chats", label: "Chats", icon: MessageSquare },
-  { href: "/dashboard/scoreboard", label: "Scoreboard", icon: Zap },
+  { href: "/dashboard/scoreboard", label: "Record Scores", icon: Zap },
 ];
 
 /** Items only visible to organizers / staff */
