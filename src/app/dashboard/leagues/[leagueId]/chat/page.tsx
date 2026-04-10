@@ -6,6 +6,8 @@ import { useParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import {
   DropdownMenu,
@@ -25,6 +27,7 @@ import {
   Megaphone,
   Hash,
   Shield,
+  ShieldAlert,
   Users,
   MoreVertical,
   UserMinus,
@@ -36,10 +39,12 @@ import {
   Bell,
   Check,
   X,
+  Flag,
 } from "lucide-react";
 import { format } from "date-fns";
-import type { Message, Player, Team, Division } from "@/lib/types";
+import type { Message, MessageReport, Player, Team, Division } from "@/lib/types";
 import { useUnread } from "@/lib/hooks/use-unread";
+import { checkMessageContent } from "@/lib/chat/content-filter";
 
 type ChannelType = Message["channel_type"];
 
@@ -75,6 +80,24 @@ export default function ChatPage() {
   // Delete confirm
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [organizerName, setOrganizerName] = useState<string>("Organizer");
+
+  // Report state
+  const [reportingMessageId, setReportingMessageId] = useState<string | null>(null);
+  const [reportReason, setReportReason] = useState<MessageReport["reason"]>("spam");
+  const [reportDetails, setReportDetails] = useState("");
+  const [reportStatus, setReportStatus] = useState<string | null>(null);
+
+  // Moderation queue state
+  const [modQueueOpen, setModQueueOpen] = useState(false);
+  const [pendingReports, setPendingReports] = useState<
+    (MessageReport & { message_body?: string; reporter_name?: string })[]
+  >([]);
+
+  // Content filter error
+  const [filterError, setFilterError] = useState<string | null>(null);
+
+  // Announcement confirmation
+  const [announcementStatus, setAnnouncementStatus] = useState<string | null>(null);
   const { channels: channelUnread, markRead } = useUnread();
 
   // Build channel list
@@ -306,28 +329,166 @@ export default function ChatPage() {
 
   async function sendMessage(isAnnouncement = false) {
     if (!body.trim() || (!currentPlayerId && !isOrganizer) || !activeChannel) return;
+
+    // Content filter check
+    const filterResult = checkMessageContent(body);
+    if (!filterResult.ok) {
+      setFilterError(filterResult.reason || "Message blocked");
+      setTimeout(() => setFilterError(null), 3000);
+      return;
+    }
+
     setSending(true);
     const supabase = createClient();
 
-    const payload: Record<string, unknown> = {
-      league_id: leagueId,
-      player_id: currentPlayerId || null,
-      profile_id: currentProfileId,
-      body: body.trim(),
-      is_announcement: isAnnouncement,
-      channel_type: activeChannel.type,
-      team_id: activeChannel.teamId,
-      division_id: activeChannel.divisionId,
-    };
+    if (isAnnouncement && isOrganizer) {
+      // Broadcast announcement to ALL channels in the league
+      const messageBase = {
+        league_id: leagueId,
+        player_id: currentPlayerId || null,
+        profile_id: currentProfileId,
+        body: body.trim(),
+        is_announcement: true,
+      };
 
-    if (activeChannel.type === "direct") {
-      payload.recipient_profile_id = currentProfileId;
+      const payloads: Record<string, unknown>[] = [];
+
+      // League channel
+      payloads.push({ ...messageBase, channel_type: "league", team_id: null, division_id: null });
+
+      // Organizer channel
+      payloads.push({ ...messageBase, channel_type: "organizer", team_id: null, division_id: null });
+
+      // All division channels
+      for (const div of divisions) {
+        payloads.push({ ...messageBase, channel_type: "division", team_id: null, division_id: div.id });
+      }
+
+      // All team channels
+      for (const team of teams) {
+        payloads.push({ ...messageBase, channel_type: "team", team_id: team.id, division_id: null });
+      }
+
+      const { error } = await supabase.from("messages").insert(payloads);
+      if (error) {
+        console.error("Failed to send announcement:", error);
+      } else {
+        setAnnouncementStatus("Announcement sent to all channels");
+        setTimeout(() => setAnnouncementStatus(null), 3000);
+      }
+    } else {
+      const payload: Record<string, unknown> = {
+        league_id: leagueId,
+        player_id: currentPlayerId || null,
+        profile_id: currentProfileId,
+        body: body.trim(),
+        is_announcement: false,
+        channel_type: activeChannel.type,
+        team_id: activeChannel.teamId,
+        division_id: activeChannel.divisionId,
+      };
+
+      if (activeChannel.type === "direct") {
+        payload.recipient_profile_id = currentProfileId;
+      }
+
+      const { error } = await supabase.from("messages").insert(payload);
+      if (error) console.error("Failed to send message:", error);
     }
 
-    const { error } = await supabase.from("messages").insert(payload);
-    if (error) console.error("Failed to send message:", error);
     setBody("");
     setSending(false);
+  }
+
+  async function submitReport() {
+    if (!reportingMessageId || !currentProfileId) return;
+    const supabase = createClient();
+    const { error } = await supabase.from("message_reports").insert({
+      message_id: reportingMessageId,
+      reporter_profile_id: currentProfileId,
+      reason: reportReason,
+      details: reportDetails.trim() || null,
+    });
+
+    if (error) {
+      if (error.code === "23505") {
+        setReportStatus("You have already reported this message");
+      } else {
+        console.error("Failed to submit report:", error);
+        setReportStatus("Failed to submit report");
+      }
+    } else {
+      setReportStatus("Report submitted");
+    }
+
+    setTimeout(() => {
+      setReportStatus(null);
+      setReportingMessageId(null);
+      setReportReason("spam");
+      setReportDetails("");
+    }, 2000);
+  }
+
+  async function loadPendingReports() {
+    const supabase = createClient();
+
+    // Get all message IDs for this league that are pending
+    const { data: reports } = await supabase
+      .from("message_reports")
+      .select("*")
+      .eq("status", "pending")
+      .order("created_at", { ascending: false });
+
+    if (!reports || reports.length === 0) {
+      setPendingReports([]);
+      return;
+    }
+
+    // Get message bodies and reporter names
+    const messageIds = [...new Set(reports.map((r: MessageReport) => r.message_id))];
+    const reporterIds = [...new Set(reports.map((r: MessageReport) => r.reporter_profile_id))];
+
+    const [messagesRes, profilesRes] = await Promise.all([
+      supabase.from("messages").select("id, body, league_id").in("id", messageIds).eq("league_id", leagueId),
+      supabase.from("profiles").select("id, full_name").in("id", reporterIds),
+    ]);
+
+    const msgMap = new Map((messagesRes.data || []).map((m: { id: string; body: string }) => [m.id, m.body]));
+    const profileMap = new Map((profilesRes.data || []).map((p: { id: string; full_name: string }) => [p.id, p.full_name]));
+
+    // Only show reports for messages in this league
+    const leagueReports = reports
+      .filter((r: MessageReport) => msgMap.has(r.message_id))
+      .map((r: MessageReport) => ({
+        ...r,
+        message_body: msgMap.get(r.message_id) || "(deleted)",
+        reporter_name: profileMap.get(r.reporter_profile_id) || "Unknown",
+      }));
+
+    setPendingReports(leagueReports);
+  }
+
+  async function dismissReport(reportId: string) {
+    const supabase = createClient();
+    await supabase
+      .from("message_reports")
+      .update({ status: "dismissed", reviewed_by: currentProfileId, reviewed_at: new Date().toISOString() })
+      .eq("id", reportId);
+    setPendingReports((prev) => prev.filter((r) => r.id !== reportId));
+  }
+
+  async function actionReport(reportId: string, messageId: string) {
+    const supabase = createClient();
+    // Soft-delete the message
+    await supabase.from("messages").update({ deleted_at: new Date().toISOString() }).eq("id", messageId);
+    // Mark report as actioned
+    await supabase
+      .from("message_reports")
+      .update({ status: "actioned", reviewed_by: currentProfileId, reviewed_at: new Date().toISOString() })
+      .eq("id", reportId);
+    // Remove from local messages and reports
+    setMessages((prev) => prev.filter((m) => m.id !== messageId));
+    setPendingReports((prev) => prev.filter((r) => r.id !== reportId));
   }
 
   async function editMessage(messageId: string) {
@@ -456,7 +617,21 @@ export default function ChatPage() {
               {activeChannel.type === "direct" && (
                 <Badge variant="outline" className="text-xs">Private</Badge>
               )}
-              <div className="ml-auto">
+              <div className="ml-auto flex items-center gap-1">
+                {isOrganizer && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-7 p-0"
+                    onClick={() => {
+                      loadPendingReports();
+                      setModQueueOpen(true);
+                    }}
+                    title="Moderation queue"
+                  >
+                    <ShieldAlert className="h-3.5 w-3.5 text-muted-foreground" />
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   size="sm"
@@ -547,31 +722,44 @@ export default function ChatPage() {
                   )}
 
                   {/* Message actions */}
-                  {canEditDelete(msg) && (
-                    <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 ml-auto">
+                  <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 ml-auto">
+                    {canEditDelete(msg) && (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0"
+                          onClick={() => {
+                            setEditingMessageId(msg.id);
+                            setEditBody(msg.body);
+                          }}
+                          title="Edit"
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0 hover:text-destructive"
+                          onClick={() => setDeleteConfirmId(msg.id)}
+                          title="Unsend"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </>
+                    )}
+                    {!isOwn && currentProfileId && (
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="h-6 w-6 p-0"
-                        onClick={() => {
-                          setEditingMessageId(msg.id);
-                          setEditBody(msg.body);
-                        }}
-                        title="Edit"
+                        className="h-6 w-6 p-0 hover:text-orange-500"
+                        onClick={() => setReportingMessageId(msg.id)}
+                        title="Report"
                       >
-                        <Pencil className="h-3 w-3" />
+                        <Flag className="h-3 w-3" />
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 w-6 p-0 hover:text-destructive"
-                        onClick={() => setDeleteConfirmId(msg.id)}
-                        title="Unsend"
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  )}
+                    )}
+                  </div>
 
                   {/* Captain remove from team */}
                   {isTeamCaptain && sender && sender.id !== currentPlayerId && (
@@ -606,6 +794,12 @@ export default function ChatPage() {
 
         {/* Message input */}
         <div className="p-4 border-t">
+          {filterError && (
+            <p className="text-sm text-destructive text-center mb-2">{filterError}</p>
+          )}
+          {announcementStatus && (
+            <p className="text-sm text-green-600 text-center mb-2">{announcementStatus}</p>
+          )}
           {!currentPlayerId && !isOrganizer ? (
             <p className="text-sm text-muted-foreground text-center">
               Add yourself as a player or sign in as organizer to participate in chat.
@@ -626,13 +820,13 @@ export default function ChatPage() {
               >
                 <Send className="h-4 w-4" />
               </Button>
-              {(isOrganizer || activeChannel?.type === "league") && (
+              {isOrganizer && (
                 <Button
                   size="sm"
                   variant="secondary"
                   onClick={() => sendMessage(true)}
                   disabled={sending || !body.trim()}
-                  title="Send as announcement"
+                  title="Send as announcement to all channels"
                 >
                   <Megaphone className="h-4 w-4" />
                 </Button>
@@ -665,6 +859,122 @@ export default function ChatPage() {
               Unsend
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Report message dialog */}
+      <Dialog
+        open={!!reportingMessageId}
+        onOpenChange={(open) => {
+          if (!open) {
+            setReportingMessageId(null);
+            setReportReason("spam");
+            setReportDetails("");
+            setReportStatus(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Report Message</DialogTitle>
+          </DialogHeader>
+          {reportStatus ? (
+            <p className="text-sm text-center py-4">{reportStatus}</p>
+          ) : (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Reason</Label>
+                <div className="space-y-2">
+                  {(
+                    [
+                      { value: "spam", label: "Spam" },
+                      { value: "harassment", label: "Harassment" },
+                      { value: "inappropriate", label: "Inappropriate Content" },
+                      { value: "other", label: "Other" },
+                    ] as const
+                  ).map((option) => (
+                    <label key={option.value} className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="report-reason"
+                        value={option.value}
+                        checked={reportReason === option.value}
+                        onChange={() => setReportReason(option.value)}
+                        className="accent-primary"
+                      />
+                      <span className="text-sm">{option.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Details (optional)</Label>
+                <Textarea
+                  value={reportDetails}
+                  onChange={(e) => setReportDetails(e.target.value)}
+                  placeholder="Provide additional context..."
+                  rows={3}
+                />
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setReportingMessageId(null)}>
+                  Cancel
+                </Button>
+                <Button onClick={submitReport}>Submit Report</Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Moderation queue dialog */}
+      <Dialog open={modQueueOpen} onOpenChange={setModQueueOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Moderation Queue</DialogTitle>
+          </DialogHeader>
+          {pendingReports.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-4">
+              No pending reports.
+            </p>
+          ) : (
+            <div className="space-y-3 max-h-80 overflow-y-auto">
+              {pendingReports.map((report) => (
+                <div key={report.id} className="border rounded-lg p-3 space-y-2">
+                  <p className="text-sm font-medium line-clamp-2">
+                    &ldquo;{report.message_body?.slice(0, 120)}
+                    {(report.message_body?.length || 0) > 120 ? "..." : ""}&rdquo;
+                  </p>
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <span>Reported by: {report.reporter_name}</span>
+                    <span>&middot;</span>
+                    <Badge variant="outline" className="text-[10px]">{report.reason}</Badge>
+                    <span>&middot;</span>
+                    <span>{format(new Date(report.created_at), "MMM d, h:mm a")}</span>
+                  </div>
+                  {report.details && (
+                    <p className="text-xs text-muted-foreground italic">{report.details}</p>
+                  )}
+                  <div className="flex gap-2 pt-1">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => dismissReport(report.id)}
+                    >
+                      Dismiss
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => actionReport(report.id, report.message_id)}
+                    >
+                      Delete Message
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

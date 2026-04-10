@@ -15,6 +15,7 @@ export default function SignupPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
   const router = useRouter();
 
   async function handleSignup(e: React.FormEvent) {
@@ -24,12 +25,15 @@ export default function SignupPage() {
 
     const supabase = createClient();
 
+    const redirectTo = `${window.location.origin}/auth/callback`;
+
     // Sign up with Supabase Auth
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email,
       password,
       options: {
         data: { full_name: fullName },
+        emailRedirectTo: redirectTo,
       },
     });
 
@@ -56,8 +60,33 @@ export default function SignupPage() {
       }
     }
 
-    router.push("/dashboard");
-    router.refresh();
+    setEmailSent(true);
+    setLoading(false);
+  }
+
+  if (emailSent) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-4">
+        <Card className="w-full max-w-sm">
+          <CardHeader className="text-center">
+            <CardTitle className="text-2xl">Check your email</CardTitle>
+          </CardHeader>
+          <CardContent className="text-center space-y-4">
+            <p className="text-muted-foreground text-sm">
+              We sent a confirmation link to <span className="font-medium text-foreground">{email}</span>. Click the link to activate your account.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Didn&apos;t get it? Check your spam folder.
+            </p>
+            <Link href="/login">
+              <Button variant="outline" className="w-full mt-2">
+                Go to sign in
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
 
   return (

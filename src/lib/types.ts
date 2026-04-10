@@ -246,6 +246,18 @@ export interface OpenGymRsvp {
   created_at: string;
 }
 
+export interface MessageReport {
+  id: string;
+  message_id: string;
+  reporter_profile_id: string;
+  reason: 'spam' | 'harassment' | 'inappropriate' | 'other';
+  details: string | null;
+  status: 'pending' | 'reviewed' | 'dismissed' | 'actioned';
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+}
+
 export interface ChatReadCursor {
   id: string;
   profile_id: string;
