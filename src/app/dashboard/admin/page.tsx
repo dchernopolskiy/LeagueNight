@@ -103,14 +103,28 @@ export default function AdminPage() {
     }
     setProfile(prof as Profile);
 
-    // Fetch leagues this user owns
-    const { data: leagueData } = await supabase
-      .from("leagues")
-      .select("*")
-      .eq("organizer_id", prof.id)
-      .order("created_at", { ascending: false });
+    // Fetch leagues this user owns + leagues where they are staff
+    const [ownedRes, staffRes] = await Promise.all([
+      supabase
+        .from("leagues")
+        .select("*")
+        .eq("organizer_id", prof.id)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("league_staff")
+        .select("league_id, league:leagues!league_staff_league_id_fkey(*)")
+        .eq("profile_id", prof.id),
+    ]);
 
-    if (!leagueData || leagueData.length === 0) {
+    // Merge and deduplicate
+    const leagueMap = new Map<string, League>();
+    for (const l of (ownedRes.data || []) as League[]) leagueMap.set(l.id, l);
+    for (const s of (staffRes.data || []) as any[]) {
+      if (s.league && !leagueMap.has(s.league.id)) leagueMap.set(s.league.id, s.league);
+    }
+    const leagueData = Array.from(leagueMap.values());
+
+    if (leagueData.length === 0) {
       setLeagues([]);
       setLoading(false);
       return;

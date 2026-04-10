@@ -10,21 +10,51 @@ export default async function LocationsPage() {
 
   const supabase = await createClient();
 
-  const [locationsRes, leaguesRes] = await Promise.all([
+  // Find organizer IDs for leagues where this user is staff (co-organizer)
+  const { data: staffLeagues } = await supabase
+    .from("league_staff")
+    .select("league_id, league:leagues!league_staff_league_id_fkey(organizer_id)")
+    .eq("profile_id", profile.id);
+
+  const organizerIds = [
+    profile.id,
+    ...new Set(
+      (staffLeagues || [])
+        .map((s: any) => s.league?.organizer_id)
+        .filter((id: string | undefined): id is string => !!id && id !== profile.id)
+    ),
+  ];
+  const staffLeagueIds = (staffLeagues || []).map((s: any) => s.league_id).filter(Boolean);
+
+  const [locationsRes, ownedLeaguesRes, staffLeaguesRes] = await Promise.all([
     supabase
       .from("locations")
       .select("*")
-      .eq("organizer_id", profile.id)
+      .in("organizer_id", organizerIds)
       .order("name"),
     supabase
       .from("leagues")
       .select("*")
       .eq("organizer_id", profile.id)
       .is("archived_at", null),
+    staffLeagueIds.length > 0
+      ? supabase
+          .from("leagues")
+          .select("*")
+          .in("id", staffLeagueIds)
+          .is("archived_at", null)
+      : Promise.resolve({ data: [] }),
   ]);
 
+  // Merge owned + staff leagues, deduplicate
+  const leagueMap = new Map<string, League>();
+  for (const l of (ownedLeaguesRes.data || []) as League[]) leagueMap.set(l.id, l);
+  for (const l of ((staffLeaguesRes as any).data || []) as League[]) {
+    if (!leagueMap.has(l.id)) leagueMap.set(l.id, l);
+  }
+
   const locations = (locationsRes.data || []) as Location[];
-  const leagues = (leaguesRes.data || []) as League[];
+  const leagues = Array.from(leagueMap.values());
   const locationIds = locations.map((l) => l.id);
   const leagueIds = leagues.map((l) => l.id);
 
