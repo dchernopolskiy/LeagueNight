@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -10,13 +10,14 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
-  Minus,
-  Plus,
   RotateCcw,
   Trophy,
   Clock,
   MapPin,
   Zap,
+  Plus,
+  Monitor,
+  Keyboard,
 } from "lucide-react";
 import { format, isToday, isTomorrow, isYesterday, addDays, subDays } from "date-fns";
 import type { Game, Team, League, LeagueSettings } from "@/lib/types";
@@ -29,6 +30,7 @@ interface GameWithMeta extends Game {
 }
 
 type ViewState = "list" | "scoring";
+type ScoringMode = "input" | "live";
 
 export default function ScoreboardPage() {
   const [allGames, setAllGames] = useState<GameWithMeta[]>([]);
@@ -45,6 +47,11 @@ export default function ScoreboardPage() {
   const [currentSet, setCurrentSet] = useState(0);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [scoringMode, setScoringMode] = useState<ScoringMode>("input");
+
+  // Swipe tracking for live mode
+  const homeTouchStart = useRef<{ y: number; time: number } | null>(null);
+  const awayTouchStart = useRef<{ y: number; time: number } | null>(null);
 
   useEffect(() => {
     loadGames();
@@ -63,7 +70,6 @@ export default function ScoreboardPage() {
     if (!profile) return;
     setProfileId(profile.id);
 
-    // Get leagues this user organizes or co-organizes
     const [ownedRes, staffRes] = await Promise.all([
       supabase.from("leagues").select("*").eq("organizer_id", profile.id),
       supabase.from("league_staff").select("*, leagues(*)").eq("profile_id", profile.id),
@@ -76,29 +82,21 @@ export default function ScoreboardPage() {
     const leagueMap = new Map(leagues.map((l) => [l.id, l]));
     const leagueIds = [...leagueMap.keys()];
 
-    if (leagueIds.length === 0) {
-      setLoading(false);
-      return;
-    }
+    if (leagueIds.length === 0) { setLoading(false); return; }
 
-    // Get games for a wide window (past 3 days to future 7 days)
     const windowStart = subDays(new Date(), 3);
     const windowEnd = addDays(new Date(), 7);
 
     const { data: games } = await supabase
-      .from("games")
-      .select("*")
+      .from("games").select("*")
       .in("league_id", leagueIds)
       .gte("scheduled_at", windowStart.toISOString())
       .lte("scheduled_at", windowEnd.toISOString())
       .in("status", ["scheduled", "completed"])
       .order("scheduled_at");
 
-    // Get all teams for these leagues
     const { data: teams } = await supabase
-      .from("teams")
-      .select("*")
-      .in("league_id", leagueIds);
+      .from("teams").select("*").in("league_id", leagueIds);
 
     const teamMap = new Map((teams || []).map((t: Team) => [t.id, t]));
 
@@ -109,10 +107,7 @@ export default function ScoreboardPage() {
       const league = leagueMap.get(game.league_id);
       if (!homeTeam || !awayTeam || !league) continue;
       enriched.push({
-        ...game,
-        homeTeam,
-        awayTeam,
-        league,
+        ...game, homeTeam, awayTeam, league,
         settings: (league.settings || {}) as LeagueSettings,
       });
     }
@@ -121,13 +116,9 @@ export default function ScoreboardPage() {
     setLoading(false);
   }
 
-  // Filter games for selected date
   const dayGames = useMemo(() => {
     const dateStr = format(selectedDate, "yyyy-MM-dd");
-    return allGames.filter((g) => {
-      const gameDate = format(new Date(g.scheduled_at), "yyyy-MM-dd");
-      return gameDate === dateStr;
-    });
+    return allGames.filter((g) => format(new Date(g.scheduled_at), "yyyy-MM-dd") === dateStr);
   }, [allGames, selectedDate]);
 
   const scheduledGames = dayGames.filter((g) => g.status === "scheduled");
@@ -160,6 +151,7 @@ export default function ScoreboardPage() {
     }
 
     setSaved(false);
+    setScoringMode("input");
     setView("scoring");
   }
 
@@ -168,15 +160,13 @@ export default function ScoreboardPage() {
     setSaving(true);
 
     const supabase = createClient();
-    const mode = activeGame.settings.scoring_mode || "game";
+    const gameMode = activeGame.settings.scoring_mode || "game";
 
     let finalHome = homeScore;
     let finalAway = awayScore;
 
-    if (mode === "sets") {
-      // Count set wins
-      let hWins = 0;
-      let aWins = 0;
+    if (gameMode === "sets") {
+      let hWins = 0, aWins = 0;
       for (const s of setScores) {
         if (s.home === 0 && s.away === 0) continue;
         if (s.home > s.away) hWins++;
@@ -186,21 +176,12 @@ export default function ScoreboardPage() {
       finalAway = aWins;
     }
 
-    const { error } = await supabase
-      .from("games")
-      .update({
-        home_score: finalHome,
-        away_score: finalAway,
-        status: "completed",
-      })
-      .eq("id", activeGame.id);
+    const { error } = await supabase.from("games").update({
+      home_score: finalHome, away_score: finalAway, status: "completed",
+    }).eq("id", activeGame.id);
 
     if (!error) {
-      await supabase.rpc("recalculate_standings", {
-        p_league_id: activeGame.league_id,
-      });
-
-      // Update local state
+      await supabase.rpc("recalculate_standings", { p_league_id: activeGame.league_id });
       setAllGames((prev) =>
         prev.map((g) =>
           g.id === activeGame.id
@@ -209,25 +190,44 @@ export default function ScoreboardPage() {
         )
       );
       setSaved(true);
-      setTimeout(() => {
-        setView("list");
-        setActiveGame(null);
-        setSaved(false);
-      }, 1200);
+      setTimeout(() => { setView("list"); setActiveGame(null); setSaved(false); }, 1200);
     }
-
     setSaving(false);
   }
 
-  // --- SCORING VIEW (full-screen mobile-optimized) ---
-  if (view === "scoring" && activeGame) {
-    const mode = activeGame.settings.scoring_mode || "game";
-    const setsToWin = activeGame.settings.sets_to_win || 2;
-    const isGameMode = mode === "game";
+  // Touch handlers for live scoreboard
+  const handleTouchStart = useCallback((side: "home" | "away", e: React.TouchEvent) => {
+    const ref = side === "home" ? homeTouchStart : awayTouchStart;
+    ref.current = { y: e.touches[0].clientY, time: Date.now() };
+  }, []);
 
-    // For sets mode, check if match is decided
-    let homeSetWins = 0;
-    let awaySetWins = 0;
+  const handleTouchEnd = useCallback((side: "home" | "away", e: React.TouchEvent) => {
+    const ref = side === "home" ? homeTouchStart : awayTouchStart;
+    const setter = side === "home" ? setHomeScore : setAwayScore;
+    if (!ref.current) return;
+
+    const dy = e.changedTouches[0].clientY - ref.current.y;
+    const dt = Date.now() - ref.current.time;
+
+    if (Math.abs(dy) > 30 && dt < 500) {
+      // Swipe down = -1
+      if (dy > 0) setter((p) => Math.max(0, p - 1));
+      // Swipe up = also -1 (any swipe = subtract)
+      else setter((p) => Math.max(0, p - 1));
+    } else {
+      // Tap = +1
+      setter((p) => p + 1);
+    }
+    ref.current = null;
+  }, []);
+
+  // --- SCORING VIEW ---
+  if (view === "scoring" && activeGame) {
+    const gameMode = activeGame.settings.scoring_mode || "game";
+    const setsToWin = activeGame.settings.sets_to_win || 2;
+    const isGameMode = gameMode === "game";
+
+    let homeSetWins = 0, awaySetWins = 0;
     if (!isGameMode) {
       for (const s of setScores) {
         if (s.home > s.away) homeSetWins++;
@@ -235,6 +235,178 @@ export default function ScoreboardPage() {
       }
     }
 
+    // ==========================================
+    // LIVE SCOREBOARD — full-screen tap/swipe
+    // ==========================================
+    if (scoringMode === "live") {
+      // For sets mode in live, we track the current set's points
+      const liveHome = isGameMode ? homeScore : (setScores[currentSet]?.home || 0);
+      const liveAway = isGameMode ? awayScore : (setScores[currentSet]?.away || 0);
+
+      const handleLiveTouchEnd = (side: "home" | "away", e: React.TouchEvent) => {
+        const ref = side === "home" ? homeTouchStart : awayTouchStart;
+        if (!ref.current) return;
+
+        const dy = e.changedTouches[0].clientY - ref.current.y;
+        const dt = Date.now() - ref.current.time;
+        const isSwipe = Math.abs(dy) > 30 && dt < 500;
+
+        if (isGameMode) {
+          const setter = side === "home" ? setHomeScore : setAwayScore;
+          if (isSwipe) setter((p) => Math.max(0, p - 1));
+          else setter((p) => p + 1);
+        } else {
+          // Sets mode — modify current set
+          const next = [...setScores];
+          const cur = next[currentSet];
+          if (side === "home") {
+            next[currentSet] = { ...cur, home: isSwipe ? Math.max(0, cur.home - 1) : cur.home + 1 };
+          } else {
+            next[currentSet] = { ...cur, away: isSwipe ? Math.max(0, cur.away - 1) : cur.away + 1 };
+          }
+          setSetScores(next);
+        }
+        ref.current = null;
+      };
+
+      return (
+        <div className="fixed inset-0 z-50 bg-black flex flex-col select-none" style={{ touchAction: "none" }}>
+          {/* Minimal top bar */}
+          <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-2 py-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-white/60 hover:text-white hover:bg-white/10 h-8"
+              onClick={() => setScoringMode("input")}
+            >
+              <ChevronLeft className="h-4 w-4 mr-1" /> Exit
+            </Button>
+            <span className="text-white/40 text-[10px]">
+              {activeGame.league.name}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-white/60 hover:text-white hover:bg-white/10 h-8"
+              onClick={() => {
+                if (isGameMode) { setHomeScore(0); setAwayScore(0); }
+                else { setSetScores((prev) => prev.map(() => ({ home: 0, away: 0 }))); setCurrentSet(0); }
+              }}
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+
+          {/* Two-panel scoreboard */}
+          <div className="flex-1 flex">
+            {/* Home side — BLUE */}
+            <div
+              className="flex-1 bg-blue-600 flex flex-col items-center justify-center relative cursor-pointer"
+              onTouchStart={(e) => { homeTouchStart.current = { y: e.touches[0].clientY, time: Date.now() }; }}
+              onTouchEnd={(e) => handleLiveTouchEnd("home", e)}
+              onClick={() => {
+                // Desktop fallback: click = +1
+                if (isGameMode) setHomeScore((p) => p + 1);
+                else {
+                  const next = [...setScores];
+                  next[currentSet] = { ...next[currentSet], home: next[currentSet].home + 1 };
+                  setSetScores(next);
+                }
+              }}
+              onContextMenu={(e) => {
+                // Right-click = -1 on desktop
+                e.preventDefault();
+                if (isGameMode) setHomeScore((p) => Math.max(0, p - 1));
+                else {
+                  const next = [...setScores];
+                  next[currentSet] = { ...next[currentSet], home: Math.max(0, next[currentSet].home - 1) };
+                  setSetScores(next);
+                }
+              }}
+            >
+              <span className="text-white font-bold leading-none" style={{ fontSize: "min(35vw, 35vh)" }}>
+                {liveHome}
+              </span>
+              <div className="absolute bottom-4 left-0 right-0 text-center">
+                <span className="bg-blue-800/80 text-white px-4 py-1.5 rounded text-sm font-medium inline-block max-w-[90%] truncate">
+                  {activeGame.homeTeam.name}
+                </span>
+              </div>
+            </div>
+
+            {/* Away side — RED */}
+            <div
+              className="flex-1 bg-red-600 flex flex-col items-center justify-center relative cursor-pointer"
+              onTouchStart={(e) => { awayTouchStart.current = { y: e.touches[0].clientY, time: Date.now() }; }}
+              onTouchEnd={(e) => handleLiveTouchEnd("away", e)}
+              onClick={() => {
+                if (isGameMode) setAwayScore((p) => p + 1);
+                else {
+                  const next = [...setScores];
+                  next[currentSet] = { ...next[currentSet], away: next[currentSet].away + 1 };
+                  setSetScores(next);
+                }
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                if (isGameMode) setAwayScore((p) => Math.max(0, p - 1));
+                else {
+                  const next = [...setScores];
+                  next[currentSet] = { ...next[currentSet], away: Math.max(0, next[currentSet].away - 1) };
+                  setSetScores(next);
+                }
+              }}
+            >
+              <span className="text-white font-bold leading-none" style={{ fontSize: "min(35vw, 35vh)" }}>
+                {liveAway}
+              </span>
+              <div className="absolute bottom-4 left-0 right-0 text-center">
+                <span className="bg-red-800/80 text-white px-4 py-1.5 rounded text-sm font-medium inline-block max-w-[90%] truncate">
+                  {activeGame.awayTeam.name}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Sets bar (volleyball/sets mode only) */}
+          {!isGameMode && (
+            <div className="bg-black flex items-center justify-center gap-2 py-2">
+              {setScores.map((s, i) => (
+                <button
+                  key={i}
+                  onClick={(e) => { e.stopPropagation(); setCurrentSet(i); }}
+                  className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                    i === currentSet
+                      ? "bg-white text-black"
+                      : "bg-white/20 text-white/70 hover:bg-white/30"
+                  }`}
+                >
+                  S{i + 1}{s.home > 0 || s.away > 0 ? `: ${s.home}-${s.away}` : ""}
+                </button>
+              ))}
+              <span className="text-white/50 text-xs ml-2">
+                Sets: {homeSetWins}-{awaySetWins}
+              </span>
+            </div>
+          )}
+
+          {/* Bottom submit bar */}
+          <div className="bg-black px-4 py-2 flex gap-2">
+            <Button
+              className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+              onClick={submitScore}
+              disabled={saving || saved}
+            >
+              {saved ? <><Check className="h-4 w-4 mr-2" /> Saved!</> : saving ? "Saving..." : <><Check className="h-4 w-4 mr-2" /> Submit Final</>}
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    // ==========================================
+    // INPUT MODE — default, type final scores
+    // ==========================================
     return (
       <div className="fixed inset-0 z-50 bg-background flex flex-col">
         {/* Top bar */}
@@ -249,189 +421,105 @@ export default function ScoreboardPage() {
               {activeGame.venue && ` \u00B7 ${activeGame.venue}`}
             </p>
           </div>
-          <div className="w-16" />
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs gap-1"
+            onClick={() => setScoringMode("live")}
+            title="Live Scoreboard"
+          >
+            <Monitor className="h-3.5 w-3.5" /> Live
+          </Button>
         </div>
 
-        {/* Main scoring area */}
-        <div className="flex-1 flex flex-col justify-center px-4 gap-6">
-
-          {/* Game mode: simple +/- counters */}
+        {/* Main input area */}
+        <div className="flex-1 flex flex-col justify-center px-6 gap-8">
+          {/* Game mode: direct number input */}
           {isGameMode && (
-            <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
+            <div className="space-y-6">
               {/* Home team */}
-              <div className="text-center">
-                <p className="text-sm font-medium truncate mb-3">{activeGame.homeTeam.name}</p>
-                <div className="flex flex-col items-center gap-2">
-                  <Button
-                    variant="outline"
-                    className="h-14 w-14 rounded-full text-2xl"
-                    onClick={() => setHomeScore((p) => p + 1)}
-                  >
-                    <Plus className="h-6 w-6" />
-                  </Button>
-                  <span className="text-6xl font-bold tabular-nums leading-none py-3">{homeScore}</span>
-                  <Button
-                    variant="outline"
-                    className="h-14 w-14 rounded-full text-2xl"
-                    onClick={() => setHomeScore((p) => Math.max(0, p - 1))}
-                  >
-                    <Minus className="h-6 w-6" />
-                  </Button>
+              <div className="flex items-center gap-4">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{activeGame.homeTeam.name}</p>
+                  <p className="text-[10px] text-muted-foreground">Home</p>
                 </div>
+                <Input
+                  type="number"
+                  min={0}
+                  value={homeScore}
+                  onChange={(e) => setHomeScore(Math.max(0, parseInt(e.target.value) || 0))}
+                  className="w-24 text-center text-3xl font-bold h-16 tabular-nums"
+                />
               </div>
 
-              {/* Divider */}
-              <div className="flex flex-col items-center gap-2">
-                <span className="text-2xl font-light text-muted-foreground">vs</span>
-              </div>
+              <div className="text-center text-muted-foreground text-sm">vs</div>
 
               {/* Away team */}
-              <div className="text-center">
-                <p className="text-sm font-medium truncate mb-3">{activeGame.awayTeam.name}</p>
-                <div className="flex flex-col items-center gap-2">
-                  <Button
-                    variant="outline"
-                    className="h-14 w-14 rounded-full text-2xl"
-                    onClick={() => setAwayScore((p) => p + 1)}
-                  >
-                    <Plus className="h-6 w-6" />
-                  </Button>
-                  <span className="text-6xl font-bold tabular-nums leading-none py-3">{awayScore}</span>
-                  <Button
-                    variant="outline"
-                    className="h-14 w-14 rounded-full text-2xl"
-                    onClick={() => setAwayScore((p) => Math.max(0, p - 1))}
-                  >
-                    <Minus className="h-6 w-6" />
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Sets mode: set-by-set entry */}
-          {!isGameMode && (
-            <div className="space-y-4">
-              {/* Set wins summary */}
-              <div className="grid grid-cols-[1fr_auto_1fr] items-center text-center gap-4">
-                <div>
-                  <p className="text-sm font-medium truncate">{activeGame.homeTeam.name}</p>
-                  <p className="text-4xl font-bold mt-1">{homeSetWins}</p>
-                </div>
-                <span className="text-lg text-muted-foreground">sets</span>
-                <div>
+              <div className="flex items-center gap-4">
+                <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate">{activeGame.awayTeam.name}</p>
-                  <p className="text-4xl font-bold mt-1">{awaySetWins}</p>
+                  <p className="text-[10px] text-muted-foreground">Away</p>
                 </div>
-              </div>
-
-              {/* Set tabs */}
-              <div className="flex justify-center gap-2">
-                {setScores.map((_, i) => (
-                  <Button
-                    key={i}
-                    variant={currentSet === i ? "default" : "outline"}
-                    size="sm"
-                    className="min-w-[3rem]"
-                    onClick={() => setCurrentSet(i)}
-                  >
-                    Set {i + 1}
-                  </Button>
-                ))}
-              </div>
-
-              {/* Current set scoring */}
-              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
-                <div className="flex flex-col items-center gap-2">
-                  <Button
-                    variant="outline"
-                    className="h-12 w-12 rounded-full"
-                    onClick={() => {
-                      const next = [...setScores];
-                      next[currentSet] = { ...next[currentSet], home: next[currentSet].home + 1 };
-                      setSetScores(next);
-                    }}
-                  >
-                    <Plus className="h-5 w-5" />
-                  </Button>
-                  <span className="text-5xl font-bold tabular-nums py-2">
-                    {setScores[currentSet]?.home || 0}
-                  </span>
-                  <Button
-                    variant="outline"
-                    className="h-12 w-12 rounded-full"
-                    onClick={() => {
-                      const next = [...setScores];
-                      next[currentSet] = { ...next[currentSet], home: Math.max(0, next[currentSet].home - 1) };
-                      setSetScores(next);
-                    }}
-                  >
-                    <Minus className="h-5 w-5" />
-                  </Button>
-                </div>
-
-                <div className="text-center">
-                  <p className="text-sm text-muted-foreground">Set {currentSet + 1}</p>
-                </div>
-
-                <div className="flex flex-col items-center gap-2">
-                  <Button
-                    variant="outline"
-                    className="h-12 w-12 rounded-full"
-                    onClick={() => {
-                      const next = [...setScores];
-                      next[currentSet] = { ...next[currentSet], away: next[currentSet].away + 1 };
-                      setSetScores(next);
-                    }}
-                  >
-                    <Plus className="h-5 w-5" />
-                  </Button>
-                  <span className="text-5xl font-bold tabular-nums py-2">
-                    {setScores[currentSet]?.away || 0}
-                  </span>
-                  <Button
-                    variant="outline"
-                    className="h-12 w-12 rounded-full"
-                    onClick={() => {
-                      const next = [...setScores];
-                      next[currentSet] = { ...next[currentSet], away: Math.max(0, next[currentSet].away - 1) };
-                      setSetScores(next);
-                    }}
-                  >
-                    <Minus className="h-5 w-5" />
-                  </Button>
-                </div>
-              </div>
-
-              {/* Set scores summary */}
-              <div className="flex justify-center gap-3 text-xs text-muted-foreground">
-                {setScores.map((s, i) => (
-                  <span key={i} className={`${i === currentSet ? "text-foreground font-medium" : ""}`}>
-                    S{i + 1}: {s.home}-{s.away}
-                  </span>
-                ))}
+                <Input
+                  type="number"
+                  min={0}
+                  value={awayScore}
+                  onChange={(e) => setAwayScore(Math.max(0, parseInt(e.target.value) || 0))}
+                  className="w-24 text-center text-3xl font-bold h-16 tabular-nums"
+                />
               </div>
             </div>
           )}
 
-          {/* Quick score buttons for common volleyball/pickleball scores */}
-          {isGameMode && activeGame.league.sport === "Pickleball" && (
-            <div className="text-center space-y-2">
-              <p className="text-xs text-muted-foreground">Quick set</p>
-              <div className="flex justify-center gap-2 flex-wrap">
-                {[11, 15, 21].map((score) => (
-                  <Button
-                    key={score}
-                    variant="outline"
-                    size="sm"
-                    className="text-xs"
-                    onClick={() => {
-                      setHomeScore(score);
-                      setAwayScore(0);
-                    }}
-                  >
-                    {score}-0 Home
-                  </Button>
+          {/* Sets mode: input per set */}
+          {!isGameMode && (
+            <div className="space-y-6">
+              <div className="text-center">
+                <p className="text-sm text-muted-foreground">
+                  {activeGame.homeTeam.name} vs {activeGame.awayTeam.name}
+                </p>
+                <p className="text-2xl font-bold mt-1">
+                  Sets: {homeSetWins} - {awaySetWins}
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                {setScores.map((s, i) => (
+                  <div key={i} className="flex items-center gap-3">
+                    <span className="text-sm font-medium w-12 text-muted-foreground">Set {i + 1}</span>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={s.home || ""}
+                      placeholder="0"
+                      onChange={(e) => {
+                        const next = [...setScores];
+                        next[i] = { ...next[i], home: Math.max(0, parseInt(e.target.value) || 0) };
+                        setSetScores(next);
+                      }}
+                      className="w-20 text-center text-lg font-bold h-12 tabular-nums"
+                    />
+                    <span className="text-muted-foreground">-</span>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={s.away || ""}
+                      placeholder="0"
+                      onChange={(e) => {
+                        const next = [...setScores];
+                        next[i] = { ...next[i], away: Math.max(0, parseInt(e.target.value) || 0) };
+                        setSetScores(next);
+                      }}
+                      className="w-20 text-center text-lg font-bold h-12 tabular-nums"
+                    />
+                    {s.home > 0 || s.away > 0 ? (
+                      <Badge variant={s.home > s.away ? "default" : "secondary"} className="text-[10px] w-12 justify-center">
+                        {s.home > s.away ? "H" : s.away > s.home ? "A" : "Tie"}
+                      </Badge>
+                    ) : (
+                      <div className="w-12" />
+                    )}
+                  </div>
                 ))}
               </div>
             </div>
@@ -439,34 +527,20 @@ export default function ScoreboardPage() {
         </div>
 
         {/* Bottom action bar */}
-        <div className="p-4 border-t bg-card space-y-2">
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              className="flex-1"
-              onClick={() => {
-                setHomeScore(0);
-                setAwayScore(0);
-                setSetScores((prev) => prev.map(() => ({ home: 0, away: 0 })));
-                setCurrentSet(0);
-              }}
-            >
-              <RotateCcw className="h-4 w-4 mr-2" /> Reset
-            </Button>
-            <Button
-              className="flex-[2]"
-              onClick={submitScore}
-              disabled={saving || saved}
-            >
-              {saved ? (
-                <><Check className="h-4 w-4 mr-2" /> Saved!</>
-              ) : saving ? (
-                "Saving..."
-              ) : (
-                <><Check className="h-4 w-4 mr-2" /> Submit Score</>
-              )}
-            </Button>
-          </div>
+        <div className="p-4 border-t bg-card">
+          <Button
+            className="w-full h-12"
+            onClick={submitScore}
+            disabled={saving || saved}
+          >
+            {saved ? (
+              <><Check className="h-4 w-4 mr-2" /> Saved!</>
+            ) : saving ? (
+              "Saving..."
+            ) : (
+              <><Check className="h-4 w-4 mr-2" /> Submit Score</>
+            )}
+          </Button>
         </div>
       </div>
     );
@@ -490,43 +564,28 @@ export default function ScoreboardPage() {
         <Zap className="h-5 w-5" /> Scoreboard
       </h1>
       <p className="text-sm text-muted-foreground">
-        Tap a game to enter scores. Optimized for courtside use.
+        Tap a game to enter scores.
       </p>
 
       {/* Date navigator */}
       <div className="flex items-center justify-between bg-card rounded-lg border p-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-9 w-9 p-0"
-          onClick={() => setSelectedDate((d) => subDays(d, 1))}
-        >
+        <Button variant="ghost" size="sm" className="h-9 w-9 p-0"
+          onClick={() => setSelectedDate((d) => subDays(d, 1))}>
           <ChevronLeft className="h-4 w-4" />
         </Button>
         <div className="text-center">
           <p className="font-medium text-sm">{dateLabel(selectedDate)}</p>
-          <p className="text-xs text-muted-foreground">
-            {format(selectedDate, "EEEE, MMMM d")}
-          </p>
+          <p className="text-xs text-muted-foreground">{format(selectedDate, "EEEE, MMMM d")}</p>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-9 w-9 p-0"
-          onClick={() => setSelectedDate((d) => addDays(d, 1))}
-        >
+        <Button variant="ghost" size="sm" className="h-9 w-9 p-0"
+          onClick={() => setSelectedDate((d) => addDays(d, 1))}>
           <ChevronRight className="h-4 w-4" />
         </Button>
       </div>
 
-      {/* Today button */}
       {!isToday(selectedDate) && (
-        <Button
-          variant="outline"
-          size="sm"
-          className="w-full"
-          onClick={() => setSelectedDate(new Date())}
-        >
+        <Button variant="outline" size="sm" className="w-full"
+          onClick={() => setSelectedDate(new Date())}>
           Jump to Today
         </Button>
       )}
@@ -538,22 +597,14 @@ export default function ScoreboardPage() {
             <Clock className="h-3.5 w-3.5" /> Needs Score ({scheduledGames.length})
           </h2>
           {scheduledGames.map((game) => (
-            <button
-              key={game.id}
-              onClick={() => openScoring(game)}
-              className="w-full text-left"
-            >
+            <button key={game.id} onClick={() => openScoring(game)} className="w-full text-left">
               <Card className="hover:ring-2 hover:ring-primary/50 transition-all active:scale-[0.98]">
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 mb-1">
-                        <Badge variant="outline" className="text-[10px] shrink-0">
-                          {game.league.sport}
-                        </Badge>
-                        <span className="text-xs text-muted-foreground truncate">
-                          {game.league.name}
-                        </span>
+                        <Badge variant="outline" className="text-[10px] shrink-0">{game.league.sport}</Badge>
+                        <span className="text-xs text-muted-foreground truncate">{game.league.name}</span>
                       </div>
                       <p className="font-medium text-sm">
                         {game.homeTeam.name}
@@ -562,13 +613,11 @@ export default function ScoreboardPage() {
                       </p>
                       <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
                         <span className="flex items-center gap-1">
-                          <Clock className="h-3 w-3" />
-                          {format(new Date(game.scheduled_at), "h:mm a")}
+                          <Clock className="h-3 w-3" />{format(new Date(game.scheduled_at), "h:mm a")}
                         </span>
                         {game.venue && (
                           <span className="flex items-center gap-1">
-                            <MapPin className="h-3 w-3" />
-                            {game.venue}
+                            <MapPin className="h-3 w-3" />{game.venue}
                           </span>
                         )}
                       </div>
@@ -593,38 +642,22 @@ export default function ScoreboardPage() {
             <Trophy className="h-3.5 w-3.5" /> Completed ({completedGames.length})
           </h2>
           {completedGames.map((game) => (
-            <button
-              key={game.id}
-              onClick={() => openScoring(game)}
-              className="w-full text-left"
-            >
+            <button key={game.id} onClick={() => openScoring(game)} className="w-full text-left">
               <Card className="opacity-80 hover:opacity-100 transition-all active:scale-[0.98]">
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 mb-1">
-                        <Badge variant="secondary" className="text-[10px] shrink-0">
-                          {game.league.sport}
-                        </Badge>
-                        <span className="text-xs text-muted-foreground truncate">
-                          {game.league.name}
-                        </span>
+                        <Badge variant="secondary" className="text-[10px] shrink-0">{game.league.sport}</Badge>
+                        <span className="text-xs text-muted-foreground truncate">{game.league.name}</span>
                       </div>
                       <p className="text-sm">
-                        <span className={game.home_score! > game.away_score! ? "font-bold" : ""}>
-                          {game.homeTeam.name}
-                        </span>
-                        <span className="mx-1.5 font-bold tabular-nums">
-                          {game.home_score} - {game.away_score}
-                        </span>
-                        <span className={game.away_score! > game.home_score! ? "font-bold" : ""}>
-                          {game.awayTeam.name}
-                        </span>
+                        <span className={game.home_score! > game.away_score! ? "font-bold" : ""}>{game.homeTeam.name}</span>
+                        <span className="mx-1.5 font-bold tabular-nums">{game.home_score} - {game.away_score}</span>
+                        <span className={game.away_score! > game.home_score! ? "font-bold" : ""}>{game.awayTeam.name}</span>
                       </p>
                     </div>
-                    <div className="ml-3 shrink-0 text-xs text-muted-foreground">
-                      tap to edit
-                    </div>
+                    <div className="ml-3 shrink-0 text-xs text-muted-foreground">tap to edit</div>
                   </div>
                 </CardContent>
               </Card>
@@ -633,7 +666,6 @@ export default function ScoreboardPage() {
         </div>
       )}
 
-      {/* Empty state */}
       {dayGames.length === 0 && (
         <Card>
           <CardContent className="py-12 text-center">
