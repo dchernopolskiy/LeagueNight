@@ -215,6 +215,7 @@ export async function POST(request: NextRequest) {
     {
       dayOfWeek: pattern.day_of_week,
       startTime: pattern.start_time,
+      endTime: pattern.end_time || null,
       venue: pattern.venue,
       courtCount: totalCourts,
       startsOn: effectiveStartsOn,
@@ -224,21 +225,22 @@ export async function POST(request: NextRequest) {
     gamesPerTeam
   );
 
-  // Delete existing scheduled games (not completed ones)
+  // Delete existing regular scheduled games (never touch playoff games)
   if (regenerateFrom) {
-    // Only delete scheduled games from the regenerateFrom date forward
     await supabase
       .from("games")
       .delete()
       .eq("league_id", leagueId)
       .eq("status", "scheduled")
-      .gte("scheduled_at", localToUTCISO(new Date(regenerateFrom), timezone));
+      .eq("is_playoff", false)
+      .gte("scheduled_at", localToUTCISO(parseLocalDate(regenerateFrom), timezone));
   } else {
     await supabase
       .from("games")
       .delete()
       .eq("league_id", leagueId)
-      .eq("status", "scheduled");
+      .eq("status", "scheduled")
+      .eq("is_playoff", false);
   }
 
   // Build a flat list of (locationId, courtNumber) slots for distribution

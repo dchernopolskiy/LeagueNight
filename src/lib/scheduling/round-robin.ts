@@ -73,6 +73,7 @@ export function assignDates(
   pattern: {
     dayOfWeek: number;
     startTime: string;
+    endTime?: string | null;
     venue: string | null;
     courtCount: number;
     startsOn: Date;
@@ -88,7 +89,7 @@ export function assignDates(
   court: string | null;
   weekNumber: number;
 }[] {
-  const { dayOfWeek, startTime, venue, courtCount, startsOn, durationMinutes, skipDates } =
+  const { dayOfWeek, startTime, endTime, venue, courtCount, startsOn, durationMinutes, skipDates } =
     pattern;
 
   const skipSet = new Set(skipDates || []);
@@ -102,6 +103,13 @@ export function assignDates(
   }
 
   const [hours, minutes] = startTime.split(":").map(Number);
+
+  // Parse end time into total minutes from midnight for easy comparison
+  let endMinutesFromMidnight: number | null = null;
+  if (endTime) {
+    const [eh, em] = endTime.split(":").map(Number);
+    endMinutesFromMidnight = eh * 60 + em;
+  }
 
   function nextGameDay(from: Date): Date {
     const d = new Date(from);
@@ -148,12 +156,18 @@ export function assignDates(
       dayMatchups.push(...(rounds.get(roundNum) || []));
     }
 
-    // Spread across time slots
+    // Spread across time slots, stopping if we'd exceed end_time
     let slotIndex = 0;
     for (const matchup of dayMatchups) {
       const courtNum = slotIndex % courtCount;
       const timeSlotOffset =
         Math.floor(slotIndex / courtCount) * durationMinutes;
+
+      // Check if this game slot would start at or after end_time
+      if (endMinutesFromMidnight !== null) {
+        const slotStartMinutes = hours * 60 + minutes + timeSlotOffset;
+        if (slotStartMinutes >= endMinutesFromMidnight) break;
+      }
 
       const gameTime = new Date(currentDate);
       gameTime.setMinutes(gameTime.getMinutes() + timeSlotOffset);

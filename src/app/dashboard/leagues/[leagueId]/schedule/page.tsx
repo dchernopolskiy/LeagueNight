@@ -121,6 +121,7 @@ export default function SchedulePage() {
   // Pattern form
   const [dayOfWeek, setDayOfWeek] = useState("4");
   const [startTime, setStartTime] = useState("19:00");
+  const [endTime, setEndTime] = useState("");
   const [venue, setVenue] = useState("");
   const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([]);
   const [durationMinutes, setDurationMinutes] = useState("60");
@@ -148,6 +149,7 @@ export default function SchedulePage() {
   const [editingPattern, setEditingPattern] = useState<GameDayPattern | null>(null);
   const [editDayOfWeek, setEditDayOfWeek] = useState("4");
   const [editStartTime, setEditStartTime] = useState("19:00");
+  const [editEndTime, setEditEndTime] = useState("");
   const [editVenue, setEditVenue] = useState("");
   const [editSelectedLocationIds, setEditSelectedLocationIds] = useState<string[]>([]);
   const [editDurationMinutes, setEditDurationMinutes] = useState("60");
@@ -189,7 +191,7 @@ export default function SchedulePage() {
     const supabase = createClient();
     const [gamesRes, teamsRes, patternsRes, playersRes, leagueRes, locationsRes] =
       await Promise.all([
-        supabase.from("games").select("*").eq("league_id", leagueId).order("scheduled_at"),
+        supabase.from("games").select("*").eq("league_id", leagueId).eq("is_playoff", false).order("scheduled_at"),
         supabase.from("teams").select("*").eq("league_id", leagueId),
         supabase.from("game_day_patterns").select("*").eq("league_id", leagueId),
         supabase.from("players").select("*").eq("league_id", leagueId).order("name"),
@@ -246,6 +248,7 @@ export default function SchedulePage() {
         duration_minutes: parseInt(durationMinutes),
         location_id: primaryLocationId,
         location_ids: selectedLocationIds,
+        end_time: endTime || null,
       })
       .select()
       .single();
@@ -268,7 +271,7 @@ export default function SchedulePage() {
   function openEditPattern(p: GameDayPattern) {
     setEditingPattern(p);
     setEditDayOfWeek(p.day_of_week.toString());
-    setEditStartTime(p.start_time);
+    setEditStartTime(p.start_time.slice(0, 5));
     setEditVenue(p.venue || "");
     setEditDurationMinutes((p.duration_minutes || 60).toString());
     // Prefer location_ids array; fall back to singular location_id for old rows
@@ -277,6 +280,7 @@ export default function SchedulePage() {
         ? p.location_ids
         : p.location_id ? [p.location_id] : []
     );
+    setEditEndTime(p.end_time ? p.end_time.slice(0, 5) : "");
     setEditStartsOn(p.starts_on);
     setEditEndsOn(p.ends_on || "");
   }
@@ -296,6 +300,7 @@ export default function SchedulePage() {
         duration_minutes: parseInt(editDurationMinutes),
         location_id: primaryLocationId,
         location_ids: editSelectedLocationIds,
+        end_time: editEndTime || null,
         starts_on: editStartsOn,
         ends_on: editEndsOn || null,
       })
@@ -314,6 +319,7 @@ export default function SchedulePage() {
                 duration_minutes: parseInt(editDurationMinutes),
                 location_id: primaryLocationId,
                 location_ids: editSelectedLocationIds,
+                end_time: editEndTime || null,
                 starts_on: editStartsOn,
                 ends_on: editEndsOn || null,
               }
@@ -740,7 +746,7 @@ export default function SchedulePage() {
               <div key={p.id} className="flex items-center justify-between border rounded-lg p-3">
                 <div>
                   <p className="font-medium">
-                    {DAYS[p.day_of_week]}s at {p.start_time}
+                    {DAYS[p.day_of_week]}s at {p.start_time.slice(0, 5)}{p.end_time ? `–${p.end_time.slice(0, 5)}` : ""}
                   </p>
                   <p className="text-sm text-muted-foreground">
                     {venueName} &middot;{" "}
@@ -829,6 +835,13 @@ export default function SchedulePage() {
                     <div className="space-y-2">
                       <Label>Start time</Label>
                       <Input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>End time <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                      <Input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
+                      <p className="text-xs text-muted-foreground">No games start after this time</p>
                     </div>
                   </div>
                   {renderLocationCheckboxes(selectedLocationIds, toggleLocationId)}
@@ -933,6 +946,13 @@ export default function SchedulePage() {
               <div className="space-y-2">
                 <Label>Start time</Label>
                 <Input type="time" value={editStartTime} onChange={(e) => setEditStartTime(e.target.value)} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>End time <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                <Input type="time" value={editEndTime} onChange={(e) => setEditEndTime(e.target.value)} />
+                <p className="text-xs text-muted-foreground">No games start after this time</p>
               </div>
             </div>
             {renderLocationCheckboxes(editSelectedLocationIds, toggleEditLocationId)}

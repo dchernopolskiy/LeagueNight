@@ -117,6 +117,7 @@ export interface GameDayPattern {
   ends_on: string | null;
   location_id: string | null;
   location_ids: string[];
+  end_time: string | null;
 }
 
 export interface Game {
