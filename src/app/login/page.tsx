@@ -2,12 +2,13 @@
 
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
+import { Trophy } from "lucide-react";
 
 function LoginForm() {
   const [email, setEmail] = useState("");
@@ -80,16 +81,26 @@ function LoginForm() {
 export default function LoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
-      <Card className="w-full max-w-sm">
-        <CardHeader className="text-center">
-          <CardTitle className="text-2xl">Sign in to LeagueNight</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Suspense>
-            <LoginForm />
-          </Suspense>
-        </CardContent>
-      </Card>
+      <div className="w-full max-w-sm space-y-8">
+        <div className="text-center">
+          <div className="h-10 w-10 rounded-xl bg-foreground text-background flex items-center justify-center mx-auto mb-4">
+            <Trophy className="h-5 w-5" />
+          </div>
+          <h1 className="font-heading text-2xl font-bold tracking-tight">
+            Welcome back
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Sign in to LeagueNight
+          </p>
+        </div>
+        <Card>
+          <CardContent className="pt-6">
+            <Suspense>
+              <LoginForm />
+            </Suspense>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Settings, ChevronRight, Users } from "lucide-react";
+import { Plus, Settings, ChevronRight, Users, Archive } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import type { League, Division, Team } from "@/lib/types";
 
@@ -27,7 +27,7 @@ export default async function DashboardPage() {
   if (!profile) redirect("/login");
 
   const supabase = await createClient();
-  const [leaguesRes, staffRes, playerRes, divisionsRes, teamsRes] = await Promise.all([
+  const [leaguesRes, staffRes, playerRes, divisionsRes, teamsRes, archivedOwnedRes] = await Promise.all([
     supabase
       .from("leagues")
       .select("*")
@@ -49,6 +49,12 @@ export default async function DashboardPage() {
     supabase
       .from("teams")
       .select("id, league_id, division_id"),
+    supabase
+      .from("leagues")
+      .select("*")
+      .eq("organizer_id", profile.id)
+      .not("archived_at", "is", null)
+      .order("created_at", { ascending: false }),
   ]);
 
   // Merge owned leagues + co-organized leagues + player leagues (dedup)
@@ -63,6 +69,21 @@ export default async function DashboardPage() {
   const leagues = [...(leaguesRes.data || []), ...staffLeagues, ...playerLeagues];
   const allDivisions = divisionsRes.data;
   const allTeams = (teamsRes.data || []) as Pick<Team, "id" | "league_id" | "division_id">[];
+
+  // Collect archived leagues from all sources
+  const archivedOwnedIds = new Set((archivedOwnedRes.data || []).map((l: any) => l.id));
+  const archivedStaffLeagues = (staffRes.data || [])
+    .map((s: any) => s.leagues)
+    .filter((l: any) => l && l.archived_at && !archivedOwnedIds.has(l.id));
+  const archivedKnownIds = new Set([...archivedOwnedIds, ...archivedStaffLeagues.map((l: any) => l.id)]);
+  const archivedPlayerLeagues = (playerRes.data || [])
+    .map((p: any) => p.leagues)
+    .filter((l: any) => l && l.archived_at && !archivedKnownIds.has(l.id));
+  const archivedLeagues = [
+    ...(archivedOwnedRes.data || []),
+    ...archivedStaffLeagues,
+    ...archivedPlayerLeagues,
+  ] as League[];
 
   const divisionsByLeague = new Map<string, Division[]>();
   if (allDivisions) {
@@ -84,8 +105,8 @@ export default async function DashboardPage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">My Leagues</h1>
+      <div className="flex items-center justify-between mb-8 md:mb-10">
+        <h1 className="font-heading text-2xl md:text-3xl font-bold tracking-tight">My Leagues</h1>
         <Button render={<Link href="/dashboard/leagues/new" />}>
           <Plus className="h-4 w-4 mr-2" />
           New League
@@ -102,7 +123,7 @@ export default async function DashboardPage() {
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-8">
           {(() => {
             const allLeagues = leagues as League[];
             const sportGroups = new Map<string, League[]>();
@@ -118,8 +139,8 @@ export default async function DashboardPage() {
               <div key={sport}>
                 {sortedSports.length > 1 && (
                   <>
-                    {i > 0 && <Separator className="mb-4" />}
-                    <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider mb-3">
+                    {i > 0 && <Separator className="mb-6" />}
+                    <h2 className="font-heading text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-4">
                       {sport}
                     </h2>
                   </>
@@ -135,10 +156,10 @@ export default async function DashboardPage() {
                         <Card key={league.id}>
                           {/* Clickable card header → league overview */}
                           <Link href={`/dashboard/leagues/${league.id}`}>
-                            <CardHeader className="pb-2 hover:bg-muted/30 transition-colors rounded-t-xl">
+                            <CardHeader className="pb-2 hover:bg-accent/40 transition-colors rounded-t-2xl">
                               <div className="flex items-center justify-between">
                                 <div>
-                                  <CardTitle className="text-lg">{league.name}</CardTitle>
+                                  <CardTitle className="text-lg tracking-tight">{league.name}</CardTitle>
                                   <p className="text-sm text-muted-foreground mt-0.5">
                                     {league.season_name || "No season set"}
                                     <span className="mx-1.5">·</span>
@@ -252,6 +273,41 @@ export default async function DashboardPage() {
             ));
           })()}
         </div>
+      )}
+
+      {archivedLeagues.length > 0 && (
+        <details className="mt-12 md:mt-16">
+          <summary className="cursor-pointer text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors flex items-center gap-2 select-none font-medium uppercase tracking-widest">
+            <Archive className="h-3.5 w-3.5" />
+            {archivedLeagues.length} archived {archivedLeagues.length === 1 ? "league" : "leagues"}
+          </summary>
+          <div className="grid gap-3 sm:grid-cols-2 mt-4">
+            {archivedLeagues.map((league) => (
+              <Card key={league.id} className="opacity-50 hover:opacity-70 transition-opacity">
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-base">{league.name}</CardTitle>
+                    {league.sport && (
+                      <Badge variant="secondary">{league.sport}</Badge>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    {league.season_name || "No season set"}
+                  </p>
+                  <Link
+                    href={`/dashboard/leagues/${league.id}/settings`}
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
+                  >
+                    <Settings className="h-3 w-3" />
+                    Manage / Unarchive
+                  </Link>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </details>
       )}
     </div>
   );

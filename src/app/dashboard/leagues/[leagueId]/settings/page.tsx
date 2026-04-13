@@ -17,7 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Copy, Check, ExternalLink, Plus, Trash2, Shield, UserPlus, ArrowRightLeft } from "lucide-react";
+import { Copy, Check, ExternalLink, Plus, Trash2, Shield, UserPlus, ArrowRightLeft, Archive, ArchiveRestore } from "lucide-react";
 import type { League, LeagueSettings, Division, LeagueStaff } from "@/lib/types";
 
 export default function SettingsPage() {
@@ -47,6 +47,8 @@ export default function SettingsPage() {
   const [inviteRole, setInviteRole] = useState<"admin" | "manager">("manager");
   const [inviting, setInviting] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
+  const [archiving, setArchiving] = useState(false);
+  const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -248,6 +250,30 @@ export default function SettingsPage() {
     // Reload
     router.refresh();
     window.location.reload();
+  }
+
+  async function archiveLeague() {
+    setArchiving(true);
+    const supabase = createClient();
+    await supabase
+      .from("leagues")
+      .update({ archived_at: new Date().toISOString() })
+      .eq("id", leagueId);
+    setArchiving(false);
+    setShowArchiveConfirm(false);
+    router.push("/dashboard");
+  }
+
+  async function unarchiveLeague() {
+    setArchiving(true);
+    const supabase = createClient();
+    await supabase
+      .from("leagues")
+      .update({ archived_at: null })
+      .eq("id", leagueId);
+    setLeague({ ...league!, archived_at: null });
+    setArchiving(false);
+    router.refresh();
   }
 
   if (!league) return <p className="text-muted-foreground">Loading...</p>;
@@ -526,6 +552,62 @@ export default function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      <Card className="border-destructive/30">
+        <CardHeader>
+          <CardTitle className="text-base text-destructive">Danger Zone</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {league.archived_at ? (
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Unarchive this league</p>
+                <p className="text-xs text-muted-foreground">Restore this league to your active dashboard.</p>
+              </div>
+              <Button variant="outline" onClick={unarchiveLeague} disabled={archiving}>
+                <ArchiveRestore className="h-4 w-4 mr-1" />
+                {archiving ? "Restoring..." : "Unarchive"}
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Archive this league</p>
+                <p className="text-xs text-muted-foreground">Hide from dashboard. All data preserved.</p>
+              </div>
+              <Button variant="destructive" onClick={() => setShowArchiveConfirm(true)} disabled={archiving}>
+                <Archive className="h-4 w-4 mr-1" />
+                Archive
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {showArchiveConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <Card className="w-full max-w-md mx-4">
+            <CardHeader>
+              <CardTitle className="text-base">Archive this league?</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                This league will be hidden from your dashboard. All historical data
+                (games, standings, playoffs) will be preserved. You can unarchive it at
+                any time.
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setShowArchiveConfirm(false)} disabled={archiving}>
+                  Cancel
+                </Button>
+                <Button variant="destructive" onClick={archiveLeague} disabled={archiving}>
+                  {archiving ? "Archiving..." : "Archive League"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

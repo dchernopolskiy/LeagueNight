@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
 
   const supabase = createAdminClient();
 
-  // Verify ownership
+  // Verify ownership or staff access
   const { data: league } = await supabase
     .from("leagues")
     .select("id")
@@ -33,7 +33,17 @@ export async function POST(request: NextRequest) {
     .single();
 
   if (!league) {
-    return NextResponse.json({ error: "League not found" }, { status: 404 });
+    // Check if user is staff
+    const { data: staffEntry } = await supabase
+      .from("league_staff")
+      .select("id")
+      .eq("league_id", leagueId)
+      .eq("profile_id", profile.id)
+      .single();
+
+    if (!staffEntry) {
+      return NextResponse.json({ error: "League not found" }, { status: 404 });
+    }
   }
 
   // Get teams
@@ -83,20 +93,28 @@ export async function POST(request: NextRequest) {
   }
   const locationsMap = new Map(locationsData.map((l) => [l.id, l]));
 
-  // Fetch location unavailability for all relevant locations
-  let locationUnavailDates: string[] = [];
+  // Fetch location unavailability for all relevant locations (with location_id for per-date filtering)
+  const unavailByDate = new Map<string, Set<string>>();
   if (effectiveLocationIds.length > 0) {
     const { data: unavailData } = await supabase
       .from("location_unavailability")
-      .select("unavailable_date")
+      .select("location_id, unavailable_date")
       .in("location_id", effectiveLocationIds);
-    if (unavailData) {
-      locationUnavailDates = unavailData.map((u: { unavailable_date: string }) => u.unavailable_date);
+    for (const u of (unavailData || [])) {
+      const dateSet = unavailByDate.get(u.unavailable_date) || new Set<string>();
+      dateSet.add(u.location_id);
+      unavailByDate.set(u.unavailable_date, dateSet);
     }
   }
 
-  // Merge location unavailability into skip dates
-  const mergedSkipDates = Array.from(new Set([...skipDates, ...locationUnavailDates]));
+  // Only skip dates where ALL selected locations are unavailable
+  const fullyUnavailDates: string[] = [];
+  for (const [date, unavailLocIds] of unavailByDate) {
+    if (effectiveLocationIds.every(id => unavailLocIds.has(id))) {
+      fullyUnavailDates.push(date);
+    }
+  }
+  const mergedSkipDates = Array.from(new Set([...skipDates, ...fullyUnavailDates]));
 
   // Generate round-robin matchups
   let allMatchups: ReturnType<typeof generateRoundRobin>;
@@ -180,33 +198,65 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Insert new games, distributing across location court slots
-  const gamesToInsert = scheduled.map((g, index) => {
-    let locationId: string | null = pattern.location_id || null;
-    let venue = g.venue;
-    let court = g.court;
+  // Helper to format date as YYYY-MM-DD
+  function formatYMD(d: Date): string {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
 
-    if (courtSlots.length > 0) {
-      // Round-robin distribute games across all court slots
-      const slot = courtSlots[index % courtSlots.length];
-      locationId = slot.locationId;
-      venue = slot.locationName;
-      // Label with court number (e.g. "Court 1", "Court 2")
-      court = slot.totalCourts > 1 ? `Court ${slot.courtNum}` : null;
+  // Insert new games, distributing across available location court slots per date
+  const gamesToInsert: any[] = [];
+
+  if (courtSlots.length > 0) {
+    // Group scheduled games by date for per-date court distribution
+    const gamesByDate = new Map<string, typeof scheduled>();
+    for (const g of scheduled) {
+      const key = formatYMD(g.scheduledAt);
+      const arr = gamesByDate.get(key) || [];
+      arr.push(g);
+      gamesByDate.set(key, arr);
     }
 
-    return {
-      league_id: leagueId,
-      home_team_id: g.home,
-      away_team_id: g.away,
-      scheduled_at: g.scheduledAt.toISOString(),
-      venue,
-      court,
-      week_number: g.weekNumber,
-      status: "scheduled",
-      location_id: locationId,
-    };
-  });
+    for (const [dateStr, dateGames] of gamesByDate) {
+      const unavailOnDate = unavailByDate.get(dateStr) || new Set<string>();
+      // Filter court slots to only available locations on this date
+      const availableSlots = courtSlots.filter(s => !unavailOnDate.has(s.locationId));
+      const slotsToUse = availableSlots.length > 0 ? availableSlots : courtSlots;
+
+      for (let i = 0; i < dateGames.length; i++) {
+        const g = dateGames[i];
+        const slot = slotsToUse[i % slotsToUse.length];
+        gamesToInsert.push({
+          league_id: leagueId,
+          home_team_id: g.home,
+          away_team_id: g.away,
+          scheduled_at: g.scheduledAt.toISOString(),
+          venue: slot.locationName,
+          court: slot.totalCourts > 1 ? `Court ${slot.courtNum}` : null,
+          week_number: g.weekNumber,
+          status: "scheduled",
+          location_id: slot.locationId,
+        });
+      }
+    }
+  } else {
+    // No locations selected — use pattern defaults
+    for (const g of scheduled) {
+      gamesToInsert.push({
+        league_id: leagueId,
+        home_team_id: g.home,
+        away_team_id: g.away,
+        scheduled_at: g.scheduledAt.toISOString(),
+        venue: g.venue,
+        court: g.court,
+        week_number: g.weekNumber,
+        status: "scheduled",
+        location_id: pattern.location_id || null,
+      });
+    }
+  }
 
   const { data: insertedGames, error } = await supabase
     .from("games")

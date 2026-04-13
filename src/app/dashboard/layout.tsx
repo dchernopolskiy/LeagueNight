@@ -23,8 +23,9 @@ export default async function DashboardLayout({
   return (
     <div className="flex h-screen">
       <DashboardSidebar profile={profile} isOrganizerOfAny={isOrganizerOfAny} />
-      <main className="flex-1 overflow-y-auto">
-        <div className="container max-w-5xl mx-auto p-6">{children}</div>
+      {/* pt-12 on mobile for top bar, pb-16 for bottom nav */}
+      <main className="flex-1 overflow-y-auto pt-12 pb-20 md:pt-0 md:pb-0">
+        <div className="max-w-5xl mx-auto px-4 py-6 md:px-6 lg:px-8 md:py-8">{children}</div>
       </main>
     </div>
   );
