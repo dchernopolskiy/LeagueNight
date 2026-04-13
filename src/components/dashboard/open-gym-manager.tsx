@@ -473,7 +473,7 @@ export function OpenGymManager({ initialSessions, locations, organizerId }: Open
                     </SelectTrigger>
                     <SelectContent>
                       {locations.map((l) => (
-                        <SelectItem key={l.id} value={l.id} label={l.name}>
+                        <SelectItem key={l.id} value={l.id}>
                           {l.name}
                         </SelectItem>
                       ))}

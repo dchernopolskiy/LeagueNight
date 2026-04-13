@@ -360,7 +360,7 @@ export function CalendarView({ games, leagues, teams, locations = [], locationUn
           <SelectContent>
             <SelectItem value="all">All Leagues</SelectItem>
             {leagues.map((l) => (
-              <SelectItem key={l.id} value={l.id} label={l.name}>
+              <SelectItem key={l.id} value={l.id}>
                 {l.name}
               </SelectItem>
             ))}

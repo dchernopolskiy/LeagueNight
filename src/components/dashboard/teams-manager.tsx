@@ -557,7 +557,7 @@ export function TeamsManager({
                     <SelectContent>
                       <SelectItem value="none">No division</SelectItem>
                       {divisions.map((d) => (
-                        <SelectItem key={d.id} value={d.id} label={d.name}>
+                        <SelectItem key={d.id} value={d.id}>
                           {d.name}
                         </SelectItem>
                       ))}
@@ -643,7 +643,7 @@ export function TeamsManager({
                               {div.name}
                             </p>
                             {divTeams.map((t) => (
-                              <SelectItem key={t.id} value={t.id} label={t.name}>
+                              <SelectItem key={t.id} value={t.id}>
                                 {t.name}
                               </SelectItem>
                             ))}
@@ -658,7 +658,7 @@ export function TeamsManager({
                           {teams
                             .filter((t) => !t.division_id)
                             .map((t) => (
-                              <SelectItem key={t.id} value={t.id} label={t.name}>
+                              <SelectItem key={t.id} value={t.id}>
                                 {t.name}
                               </SelectItem>
                             ))}
@@ -667,7 +667,7 @@ export function TeamsManager({
                     </>
                   ) : (
                     teams.map((t) => (
-                      <SelectItem key={t.id} value={t.id} label={t.name}>
+                      <SelectItem key={t.id} value={t.id}>
                         {t.name}
                       </SelectItem>
                     ))

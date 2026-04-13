@@ -413,7 +413,7 @@ export default function PlayoffsPage() {
                       <SelectContent>
                         <SelectItem value="all">All divisions</SelectItem>
                         {divisions.map((d) => (
-                          <SelectItem key={d.id} value={d.id} label={d.name}>
+                          <SelectItem key={d.id} value={d.id}>
                             {d.name}
                           </SelectItem>
                         ))}

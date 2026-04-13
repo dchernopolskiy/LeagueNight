@@ -4,6 +4,51 @@ import { getProfile } from "@/lib/supabase/helpers";
 import { generateRoundRobin, assignDates } from "@/lib/scheduling/round-robin";
 import { NextRequest, NextResponse } from "next/server";
 
+/**
+ * Convert a Date whose get*() components represent the intended local time
+ * in `timezone` into a correct UTC ISO string.
+ *
+ * On the server (UTC), `setHours(19, 0)` creates 19:00 UTC — but we actually
+ * mean 19:00 in the league's timezone. This function finds the real UTC instant
+ * that corresponds to those year/month/day/hour/minute values in the given tz.
+ */
+function localToUTCISO(date: Date, timezone: string): string {
+  const year = date.getFullYear();
+  const month = date.getMonth(); // 0-indexed
+  const day = date.getDate();
+  const hours = date.getHours();
+  const minutes = date.getMinutes();
+
+  // Start with a UTC guess using the same numeric components
+  let guess = new Date(Date.UTC(year, month, day, hours, minutes, 0));
+
+  // Iteratively adjust: check what those UTC millis look like in the target
+  // timezone, compute the drift, and correct. Two passes always converge.
+  for (let i = 0; i < 2; i++) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).formatToParts(guess);
+
+    const get = (type: string) =>
+      parseInt(parts.find((p) => p.type === type)?.value || "0");
+
+    const gotH = get("hour") === 24 ? 0 : get("hour");
+    const gotMs = Date.UTC(get("year"), get("month") - 1, get("day"), gotH, get("minute"), 0);
+    const wantMs = Date.UTC(year, month, day, hours, minutes, 0);
+
+    guess = new Date(guess.getTime() + (wantMs - gotMs));
+  }
+
+  return guess.toISOString();
+}
+
 export async function POST(request: NextRequest) {
   const profile = await getProfile();
   if (!profile) {
@@ -45,6 +90,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "League not found" }, { status: 404 });
     }
   }
+
+  // Get league timezone for correct timestamp conversion
+  const { data: leagueInfo } = await supabase
+    .from("leagues")
+    .select("timezone")
+    .eq("id", leagueId)
+    .single();
+  const timezone = leagueInfo?.timezone || "America/New_York";
 
   // Get teams
   const { data: teams } = await supabase
@@ -148,7 +201,11 @@ export async function POST(request: NextRequest) {
   }
 
   // Assign dates — use total courts across all selected locations
-  const effectiveStartsOn = regenerateFrom ? new Date(regenerateFrom) : new Date(pattern.starts_on);
+  // Append T00:00:00 to force local-time parsing (date-only strings like
+  // "2026-04-06" are parsed as UTC midnight, which shifts the day backward
+  // in western timezones and breaks day-of-week calculations).
+  const parseLocalDate = (s: string) => new Date(s.includes("T") ? s : `${s}T00:00:00`);
+  const effectiveStartsOn = regenerateFrom ? parseLocalDate(regenerateFrom) : parseLocalDate(pattern.starts_on);
   const totalCourts = effectiveLocationIds.length > 0
     ? locationsData.reduce((sum, l) => sum + l.court_count, 0)
     : (pattern.court_count || 1);
@@ -175,7 +232,7 @@ export async function POST(request: NextRequest) {
       .delete()
       .eq("league_id", leagueId)
       .eq("status", "scheduled")
-      .gte("scheduled_at", new Date(regenerateFrom).toISOString());
+      .gte("scheduled_at", localToUTCISO(new Date(regenerateFrom), timezone));
   } else {
     await supabase
       .from("games")
@@ -232,7 +289,7 @@ export async function POST(request: NextRequest) {
           league_id: leagueId,
           home_team_id: g.home,
           away_team_id: g.away,
-          scheduled_at: g.scheduledAt.toISOString(),
+          scheduled_at: localToUTCISO(g.scheduledAt, timezone),
           venue: slot.locationName,
           court: slot.totalCourts > 1 ? `Court ${slot.courtNum}` : null,
           week_number: g.weekNumber,
@@ -248,7 +305,7 @@ export async function POST(request: NextRequest) {
         league_id: leagueId,
         home_team_id: g.home,
         away_team_id: g.away,
-        scheduled_at: g.scheduledAt.toISOString(),
+        scheduled_at: localToUTCISO(g.scheduledAt, timezone),
         venue: g.venue,
         court: g.court,
         week_number: g.weekNumber,

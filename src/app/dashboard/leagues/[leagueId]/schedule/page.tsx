@@ -245,6 +245,7 @@ export default function SchedulePage() {
         ends_on: endsOn || null,
         duration_minutes: parseInt(durationMinutes),
         location_id: primaryLocationId,
+        location_ids: selectedLocationIds,
       })
       .select()
       .single();
@@ -270,7 +271,12 @@ export default function SchedulePage() {
     setEditStartTime(p.start_time);
     setEditVenue(p.venue || "");
     setEditDurationMinutes((p.duration_minutes || 60).toString());
-    setEditSelectedLocationIds(p.location_id ? [p.location_id] : []);
+    // Prefer location_ids array; fall back to singular location_id for old rows
+    setEditSelectedLocationIds(
+      p.location_ids?.length > 0
+        ? p.location_ids
+        : p.location_id ? [p.location_id] : []
+    );
     setEditStartsOn(p.starts_on);
     setEditEndsOn(p.ends_on || "");
   }
@@ -289,6 +295,7 @@ export default function SchedulePage() {
         court_count: courtCount,
         duration_minutes: parseInt(editDurationMinutes),
         location_id: primaryLocationId,
+        location_ids: editSelectedLocationIds,
         starts_on: editStartsOn,
         ends_on: editEndsOn || null,
       })
@@ -306,6 +313,7 @@ export default function SchedulePage() {
                 court_count: courtCount,
                 duration_minutes: parseInt(editDurationMinutes),
                 location_id: primaryLocationId,
+                location_ids: editSelectedLocationIds,
                 starts_on: editStartsOn,
                 ends_on: editEndsOn || null,
               }
@@ -348,6 +356,7 @@ export default function SchedulePage() {
   }
 
   function getLocationIdsForPattern(p: GameDayPattern): string[] {
+    if (p.location_ids?.length > 0) return p.location_ids;
     return p.location_id ? [p.location_id] : [];
   }
 
@@ -355,10 +364,7 @@ export default function SchedulePage() {
     setGenerating(true);
     setConfirmGenerate(null);
     const pattern = patterns.find((p) => p.id === patternId);
-    // Use selectedLocationIds from form state if available, otherwise fall back to pattern's location
-    const locationIds = selectedLocationIds.length > 0
-      ? selectedLocationIds
-      : pattern ? getLocationIdsForPattern(pattern) : [];
+    const locationIds = pattern ? getLocationIdsForPattern(pattern) : [];
 
     const res = await fetch("/api/schedule/generate", {
       method: "POST",
@@ -712,12 +718,19 @@ export default function SchedulePage() {
           </div>
 
           {patterns.map((p) => {
-            const patternLoc = p.location_id ? locationsMap.get(p.location_id) : null;
-            const venueName = patternLoc ? patternLoc.name : p.venue || "No venue set";
-            const upcomingUnavail = p.location_id
+            const patternLocIds = p.location_ids?.length > 0
+              ? p.location_ids
+              : p.location_id ? [p.location_id] : [];
+            const patternLocNames = patternLocIds
+              .map((id) => locationsMap.get(id)?.name)
+              .filter(Boolean) as string[];
+            const venueName = patternLocNames.length > 0
+              ? patternLocNames.join(", ")
+              : p.venue || "No venue set";
+            const upcomingUnavail = patternLocIds.length > 0
               ? locationUnavail.filter(
                   (u) =>
-                    u.location_id === p.location_id &&
+                    patternLocIds.includes(u.location_id) &&
                     u.unavailable_date >= p.starts_on &&
                     (!p.ends_on || u.unavailable_date <= p.ends_on)
                 )
@@ -1006,7 +1019,7 @@ export default function SchedulePage() {
                                   </SelectTrigger>
                                   <SelectContent>
                                     {teams.map((t) => (
-                                      <SelectItem key={t.id} value={t.id} label={t.name}>
+                                      <SelectItem key={t.id} value={t.id}>
                                         {t.name}
                                       </SelectItem>
                                     ))}
@@ -1021,7 +1034,7 @@ export default function SchedulePage() {
                                   </SelectTrigger>
                                   <SelectContent>
                                     {teams.map((t) => (
-                                      <SelectItem key={t.id} value={t.id} label={t.name}>
+                                      <SelectItem key={t.id} value={t.id}>
                                         {t.name}
                                       </SelectItem>
                                     ))}
@@ -1204,7 +1217,7 @@ export default function SchedulePage() {
                           </SelectTrigger>
                           <SelectContent>
                             {availableLocations.map((loc) => (
-                              <SelectItem key={loc.id} value={loc.id} label={loc.name}>
+                              <SelectItem key={loc.id} value={loc.id}>
                                 {loc.name}
                               </SelectItem>
                             ))}

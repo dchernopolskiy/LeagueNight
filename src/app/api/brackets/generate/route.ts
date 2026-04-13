@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
 
   const supabase = createAdminClient();
 
-  // Verify organizer owns the league
+  // Verify ownership or staff access
   const { data: league } = await supabase
     .from("leagues")
     .select("id")
@@ -46,7 +46,16 @@ export async function POST(request: NextRequest) {
     .single();
 
   if (!league) {
-    return NextResponse.json({ error: "League not found" }, { status: 404 });
+    const { data: staffEntry } = await supabase
+      .from("league_staff")
+      .select("id")
+      .eq("league_id", leagueId)
+      .eq("profile_id", profile.id)
+      .single();
+
+    if (!staffEntry) {
+      return NextResponse.json({ error: "League not found" }, { status: 404 });
+    }
   }
 
   // Get standings, optionally filtered by division
