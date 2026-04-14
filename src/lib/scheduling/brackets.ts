@@ -72,7 +72,9 @@ function generateSingleElimination(
 
     const topPos = i * 2;
     const bottomPos = i * 2 + 1;
-    const nextRoundPos = i;
+    // Round 2 has half as many matchups as Round 1, so two R1 matches
+    // feed into one R2 matchup: matches 0&1 → matchup 0, matches 2&3 → matchup 1.
+    const nextRoundPos = Math.floor(i / 2);
 
     slots.push({
       round: 1,
@@ -202,9 +204,13 @@ function generateDoubleElimination(
     const bottomStanding =
       bottomSeed <= numTeams ? seededTeams[bottomSeed - 1] : null;
 
-    // Losers of WB R1 go to LB R1 (the first LB round)
-    // LB R1 has bracketSize/4 matchups; WB R1 matchup i feeds LB R1 matchup floor(i/2)
-    const loserTo = `L-${lbFirstRound}-${i}`;
+    // Losers of WB R1 go to LB R1 (the first LB round).
+    // Two adjacent WB R1 matches feed one LB R1 matchup:
+    //   matches 0&1 → LB matchup 0, matches 2&3 → LB matchup 1, etc.
+    const lbMatchup = Math.floor(i / 2);
+    const loserTo = `L-${lbFirstRound}-${lbMatchup}`;
+    // Same pairing for WB R2: matches 0&1 both send their winner to WB R2 matchup 0, etc.
+    const wbR2Matchup = Math.floor(i / 2);
 
     slots.push({
       round: 1,
@@ -212,9 +218,8 @@ function generateDoubleElimination(
       team_id: topStanding?.team_id ?? null,
       seed: topSeed <= numTeams ? topSeed : null,
       game_id: null,
-      winner_to: `W-2-${i}`,
+      winner_to: `W-2-${wbR2Matchup}`,
       loser_to: loserTo,
-
     });
 
     slots.push({
@@ -223,9 +228,8 @@ function generateDoubleElimination(
       team_id: bottomStanding?.team_id ?? null,
       seed: bottomSeed <= numTeams ? bottomSeed : null,
       game_id: null,
-      winner_to: `W-2-${i}`,
+      winner_to: `W-2-${wbR2Matchup}`,
       loser_to: loserTo,
-
     });
   }
 
@@ -288,21 +292,14 @@ function generateDoubleElimination(
   for (let lbRound = 1; lbRound <= lbRounds; lbRound++) {
     const actualRound = lbFirstRound + lbRound - 1;
 
-    let matchupsInRound: number;
-    if (lbRound === 1) {
-      // First LB round: WB R1 losers pair up
-      matchupsInRound = firstRoundMatchups; // Each WB R1 matchup sends one loser
-    } else {
-      // Odd LB rounds (3, 5, ...): halve previous round
-      // Even LB rounds (2, 4, ...): same count as previous (absorbing WB drop-downs)
-      if (lbRound % 2 === 0) {
-        // Even: same matchup count as previous odd round (absorb WB dropdowns)
-        matchupsInRound = Math.max(1, Math.ceil(firstRoundMatchups / Math.pow(2, Math.floor(lbRound / 2))));
-      } else {
-        // Odd: halve previous even round
-        matchupsInRound = Math.max(1, Math.ceil(firstRoundMatchups / Math.pow(2, Math.floor(lbRound / 2))));
-      }
-    }
+    // LB R1 has firstRoundMatchups/2 matchups (pairs of WB R1 losers).
+    // Odd LB rounds (1, 3, 5, ...): survivors play each other → halve count.
+    // Even LB rounds (2, 4, 6, ...): absorb WB drop-downs → same count as previous round.
+    // Formula: Math.floor((firstRoundMatchups/2) / 2^floor((lbRound-1)/2))
+    const matchupsInRound = Math.max(
+      1,
+      Math.floor((firstRoundMatchups / 2) / Math.pow(2, Math.floor((lbRound - 1) / 2)))
+    );
 
     for (let i = 0; i < matchupsInRound; i++) {
       const winnerTo =
@@ -358,8 +355,16 @@ function generateDoubleElimination(
   });
 
   // --- Handle byes in WB R1 ---
-  // If one side of a WB R1 matchup has no team, auto-advance to WB R2
-  // (no loser is generated for a bye)
+  // If one side of a WB R1 matchup has no team, auto-advance the present team
+  // to WB R2, and clear loser_to (byes produce no loser for the losers bracket).
+  //
+  // wbR2Slots[i] maps directly to the R2 slot position for WB R1 match i:
+  //   match 0 bye → wbR2Slots[0] = R2 matchup 0 top
+  //   match 1 bye → wbR2Slots[1] = R2 matchup 0 bottom
+  //   match 2 bye → wbR2Slots[2] = R2 matchup 1 top
+  //   match 3 bye → wbR2Slots[3] = R2 matchup 1 bottom
+  // This is consistent with winner_to = W-2-floor(i/2): the real-game winner
+  // fills whichever of the two R2 matchup slots the bye hasn't already taken.
   const wbR1Slots = slots.filter((s) => s.round === 1);
   const wbR2Slots = slots.filter((s) => s.round === 2);
   for (let i = 0; i < firstRoundMatchups; i++) {
@@ -369,16 +374,21 @@ function generateDoubleElimination(
     const bottomHas = bottomSlot.team_id !== null;
 
     if (topHas && !bottomHas) {
-      // Top team gets a bye — advance to WB R2
+      // Top team gets a bye — advance to WB R2; no loser goes to LB
       if (wbR2Slots[i]) {
         wbR2Slots[i].team_id = topSlot.team_id;
         wbR2Slots[i].seed = topSlot.seed;
       }
+      topSlot.loser_to = null;
+      bottomSlot.loser_to = null;
     } else if (!topHas && bottomHas) {
+      // Bottom team gets a bye — same treatment
       if (wbR2Slots[i]) {
         wbR2Slots[i].team_id = bottomSlot.team_id;
         wbR2Slots[i].seed = bottomSlot.seed;
       }
+      topSlot.loser_to = null;
+      bottomSlot.loser_to = null;
     }
   }
 

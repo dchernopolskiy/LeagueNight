@@ -1293,8 +1293,8 @@ function MatchupCard({
                 <Select
                   value={schedLocationId || "none"}
                   onValueChange={(v) => {
-                    const newLocId = v === "none" ? "" : v;
-                    setSchedLocationId(newLocId);
+                    if (!v) return;
+                    setSchedLocationId(v === "none" ? "" : v);
                     setSchedCourt(""); // reset court when location changes
                   }}
                 >
@@ -1318,7 +1318,7 @@ function MatchupCard({
                 return (
                   <Select
                     value={schedCourt || "none"}
-                    onValueChange={(v) => setSchedCourt(v === "none" ? "" : v)}
+                    onValueChange={(v) => v && setSchedCourt(v === "none" ? "" : v)}
                   >
                     <SelectTrigger className="h-6 text-xs">
                       <SelectValue placeholder="Court (optional)" />

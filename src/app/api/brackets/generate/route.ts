@@ -173,8 +173,10 @@ export async function POST(request: NextRequest) {
       return new Date().toISOString();
     }
 
-    // Create playoff games for first round matchups
-    const firstRoundSlots = slots.filter((s) => s.round === 1 && s.team_id);
+    // Create playoff games for first round matchups.
+    // We must iterate ALL R1 slots in pairs (by position order) so that bye slots
+    // are skipped correctly — filtering out byes first would mis-pair the remaining teams.
+    const allFirstRoundSlots = slots.filter((s) => s.round === 1);
     const gameInserts: {
       league_id: string;
       home_team_id: string;
@@ -185,12 +187,15 @@ export async function POST(request: NextRequest) {
       location_id?: string;
       venue?: string;
     }[] = [];
+    // Map from matchup index (i/2) to gameInserts index, for game_id assignment below.
+    const matchupGameIdx: (number | null)[] = [];
 
-    for (let i = 0; i < firstRoundSlots.length; i += 2) {
-      const topSlot = firstRoundSlots[i];
-      const bottomSlot = firstRoundSlots[i + 1];
+    for (let i = 0; i < allFirstRoundSlots.length; i += 2) {
+      const topSlot = allFirstRoundSlots[i];
+      const bottomSlot = allFirstRoundSlots[i + 1];
 
       if (topSlot?.team_id && bottomSlot?.team_id) {
+        matchupGameIdx.push(gameInserts.length);
         gameInserts.push({
           league_id: leagueId,
           home_team_id: topSlot.team_id,
@@ -200,6 +205,8 @@ export async function POST(request: NextRequest) {
           is_playoff: true,
           ...(defaultLocationId && { location_id: defaultLocationId, venue: defaultLocationName }),
         });
+      } else {
+        matchupGameIdx.push(null); // bye matchup — no game
       }
     }
 
@@ -221,15 +228,13 @@ export async function POST(request: NextRequest) {
       insertedGames = games || [];
     }
 
-    // Assign game IDs to first round slot pairs
+    // Assign game IDs to first round slot pairs using positional matchup index.
     const slotsWithGames = slots.map((slot) => {
-      if (slot.round === 1 && slot.team_id) {
-        const pairIndex = Math.floor(firstRoundSlots.indexOf(slot) / 2);
-        return {
-          ...slot,
-          bracket_id: bracket.id,
-          game_id: insertedGames[pairIndex]?.id ?? null,
-        };
+      if (slot.round === 1) {
+        const matchupIndex = Math.floor(slot.position / 2);
+        const gameIdx = matchupGameIdx[matchupIndex];
+        const gameId = gameIdx != null ? (insertedGames[gameIdx]?.id ?? null) : null;
+        return { ...slot, bracket_id: bracket.id, game_id: gameId };
       }
       return { ...slot, bracket_id: bracket.id };
     });
