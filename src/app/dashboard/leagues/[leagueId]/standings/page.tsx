@@ -79,8 +79,9 @@ export default function StandingsPage() {
       setSetScores(
         Array.from({ length: maxSets }, () => ({ home: "", away: "" }))
       );
-      setHomeScore("");
-      setAwayScore("");
+      // Load existing scores if available
+      setHomeScore(game.home_score?.toString() || "");
+      setAwayScore(game.away_score?.toString() || "");
     } else {
       setHomeScore(game.home_score?.toString() || "");
       setAwayScore(game.away_score?.toString() || "");

@@ -37,7 +37,7 @@ import {
   Copy,
   Check,
 } from "lucide-react";
-import type { League, LeagueSettings, Team, Player, Game, Division, LeagueStaff } from "@/lib/types";
+import type { League, LeagueSettings, Team, Player, Game, Division, LeagueStaff, DivisionCrossPlay } from "@/lib/types";
 import { PublicLinkCopy } from "@/components/dashboard/public-link-copy";
 
 export default function LeagueOverviewPage() {
@@ -67,6 +67,12 @@ export default function LeagueOverviewPage() {
   const [newDivName, setNewDivName] = useState("");
   const [newDivLevel, setNewDivLevel] = useState("1");
   const [addingDiv, setAddingDiv] = useState(false);
+
+  // Cross-division play state
+  const [crossPlayRules, setCrossPlayRules] = useState<DivisionCrossPlay[]>([]);
+  const [selectedDivisionA, setSelectedDivisionA] = useState<string>("");
+  const [selectedDivisionB, setSelectedDivisionB] = useState<string>("");
+  const [addingCrossPlay, setAddingCrossPlay] = useState(false);
 
   // Co-organizer state
   const [staff, setStaff] = useState<(LeagueStaff & { profile?: { full_name: string; email: string } })[]>([]);
@@ -109,7 +115,7 @@ export default function LeagueOverviewPage() {
       }
 
       // Load overview data
-      const [teamsRes, playersRes, gamesRes, divsRes] = await Promise.all([
+      const [teamsRes, playersRes, gamesRes, divsRes, crossPlayRes] = await Promise.all([
         supabase.from("teams").select("*").eq("league_id", leagueId),
         supabase.from("players").select("*").eq("league_id", leagueId),
         supabase
@@ -124,12 +130,17 @@ export default function LeagueOverviewPage() {
           .select("*")
           .eq("league_id", leagueId)
           .order("level"),
+        supabase
+          .from("division_cross_play")
+          .select("*")
+          .eq("league_id", leagueId),
       ]);
 
       setTeams((teamsRes.data || []) as Team[]);
       setPlayers((playersRes.data || []) as Player[]);
       setUpcomingGames((gamesRes.data || []) as Game[]);
       setDivisions((divsRes.data || []) as Division[]);
+      setCrossPlayRules((crossPlayRes.data || []) as DivisionCrossPlay[]);
 
       // Load current user profile
       const { data: { user } } = await supabase.auth.getUser();
@@ -208,7 +219,63 @@ export default function LeagueOverviewPage() {
       .eq("id", divId);
     if (!error) {
       setDivisions(divisions.filter((d) => d.id !== divId));
+      // Also remove any cross-play rules involving this division
+      setCrossPlayRules(crossPlayRules.filter(
+        (rule) => rule.division_a_id !== divId && rule.division_b_id !== divId
+      ));
     }
+  }
+
+  async function addCrossPlayRule() {
+    if (!selectedDivisionA || !selectedDivisionB) return;
+    if (selectedDivisionA === selectedDivisionB) return;
+
+    setAddingCrossPlay(true);
+    const supabase = createClient();
+
+    // Ensure ordering: division_a_id < division_b_id
+    const [divA, divB] = selectedDivisionA < selectedDivisionB
+      ? [selectedDivisionA, selectedDivisionB]
+      : [selectedDivisionB, selectedDivisionA];
+
+    const { data, error } = await supabase
+      .from("division_cross_play")
+      .insert({
+        league_id: leagueId,
+        division_a_id: divA,
+        division_b_id: divB,
+      })
+      .select()
+      .single();
+
+    if (!error && data) {
+      setCrossPlayRules([...crossPlayRules, data as DivisionCrossPlay]);
+      setSelectedDivisionA("");
+      setSelectedDivisionB("");
+    }
+    setAddingCrossPlay(false);
+  }
+
+  async function deleteCrossPlayRule(ruleId: string) {
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("division_cross_play")
+      .delete()
+      .eq("id", ruleId);
+    if (!error) {
+      setCrossPlayRules(crossPlayRules.filter((r) => r.id !== ruleId));
+    }
+  }
+
+  // Helper function to check if two divisions can play together
+  function canDivisionsPlay(divAId: string, divBId: string): boolean {
+    if (divAId === divBId) return true; // Same division always plays together
+    if (crossPlayRules.length === 0) return true; // No rules = all divisions can play
+
+    const [smaller, larger] = divAId < divBId ? [divAId, divBId] : [divBId, divAId];
+    return crossPlayRules.some(
+      (rule) => rule.division_a_id === smaller && rule.division_b_id === larger
+    );
   }
 
   function copyPublicLink() {
@@ -743,6 +810,106 @@ export default function LeagueOverviewPage() {
                 </div>
               </CardContent>
             </Card>
+
+            {/* Cross-Division Play */}
+            {divisions.length >= 2 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Cross-Division Play</CardTitle>
+                  <CardDescription>
+                    Configure which divisions can play games against each other
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {crossPlayRules.length === 0 ? (
+                    <div className="rounded-md border border-dashed p-4 text-center">
+                      <p className="text-sm text-muted-foreground mb-1">
+                        No cross-division rules configured
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        By default, all divisions can play together when "Mix Divisions" is enabled. Add rules to restrict which divisions can play each other.
+                      </p>
+                    </div>
+                  ) : (
+                    <ul className="space-y-2">
+                      {crossPlayRules.map((rule) => {
+                        const divA = divisions.find((d) => d.id === rule.division_a_id);
+                        const divB = divisions.find((d) => d.id === rule.division_b_id);
+                        return (
+                          <li
+                            key={rule.id}
+                            className="flex items-center justify-between rounded-md border px-3 py-2 hover:bg-accent/50 transition-colors"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm">
+                                {divA?.name || "Unknown"} <span className="text-muted-foreground">↔</span> {divB?.name || "Unknown"}
+                              </span>
+                              <Badge variant="outline" className="text-[10px]">Can play</Badge>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                              onClick={() => deleteCrossPlayRule(rule.id)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                  <Separator />
+                  <div className="space-y-3">
+                    <Label className="text-sm font-medium">Add cross-play rule</Label>
+                    <div className="flex gap-2">
+                      <Select
+                        value={selectedDivisionA}
+                        onValueChange={(v) => v && setSelectedDivisionA(v)}
+                      >
+                        <SelectTrigger className="flex-1">
+                          <SelectValue placeholder="Select division" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {divisions.map((div) => (
+                            <SelectItem key={div.id} value={div.id} disabled={div.id === selectedDivisionB}>
+                              {div.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <span className="self-center text-muted-foreground">↔</span>
+                      <Select
+                        value={selectedDivisionB}
+                        onValueChange={(v) => v && setSelectedDivisionB(v)}
+                      >
+                        <SelectTrigger className="flex-1">
+                          <SelectValue placeholder="Select division" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {divisions.map((div) => (
+                            <SelectItem key={div.id} value={div.id} disabled={div.id === selectedDivisionA}>
+                              {div.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        variant="outline"
+                        onClick={addCrossPlayRule}
+                        disabled={addingCrossPlay || !selectedDivisionA || !selectedDivisionB || selectedDivisionA === selectedDivisionB}
+                      >
+                        <Plus className="h-4 w-4 mr-1" />
+                        Add
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Allow two divisions to play games against each other. Example: "A Rank ↔ B Major" means teams from A Rank can play against teams from B Major.
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Co-Organizers */}
             <Card>

@@ -47,6 +47,14 @@ export interface Division {
   created_at: string;
 }
 
+export interface DivisionCrossPlay {
+  id: string;
+  league_id: string;
+  division_a_id: string;
+  division_b_id: string;
+  created_at: string;
+}
+
 export interface Person {
   id: string;
   email: string | null;

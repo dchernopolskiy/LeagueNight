@@ -113,6 +113,12 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Get cross-division play rules
+  const { data: crossPlayRules } = await supabase
+    .from("division_cross_play")
+    .select("*")
+    .eq("league_id", leagueId);
+
   // Get pattern
   const { data: pattern } = await supabase
     .from("game_day_patterns")
@@ -174,9 +180,67 @@ export async function POST(request: NextRequest) {
   let allMatchups: ReturnType<typeof generateRoundRobin>;
 
   if (mixDivisions) {
-    // Cross-division: one round-robin across all teams
-    const teamIds = teams.map((t) => t.id);
-    allMatchups = generateRoundRobin(teamIds, matchupFrequency);
+    // Cross-division play with cross-play rules support
+    if (!crossPlayRules || crossPlayRules.length === 0) {
+      // No cross-play rules: one round-robin across all teams (old behavior)
+      const teamIds = teams.map((t) => t.id);
+      allMatchups = generateRoundRobin(teamIds, matchupFrequency);
+    } else {
+      // With cross-play rules: generate matchups respecting allowed division pairs
+      // First, group teams by division
+      const divisionTeams = new Map<string, string[]>();
+      for (const t of teams) {
+        const divKey = t.division_id ?? "__none__";
+        const arr = divisionTeams.get(divKey) || [];
+        arr.push(t.id);
+        divisionTeams.set(divKey, arr);
+      }
+
+      // Helper to check if two divisions can play together
+      const canDivisionsPlay = (divA: string | null, divB: string | null): boolean => {
+        if (!divA || !divB) return true; // Teams without divisions can play with anyone
+        if (divA === divB) return true; // Same division always plays together
+        const [smaller, larger] = divA < divB ? [divA, divB] : [divB, divA];
+        return crossPlayRules.some(
+          (rule) => rule.division_a_id === smaller && rule.division_b_id === larger
+        );
+      };
+
+      allMatchups = [];
+
+      // 1. Generate within-division matchups for each division
+      for (const [divId, teamIds] of divisionTeams) {
+        if (teamIds.length >= 2) {
+          allMatchups.push(...generateRoundRobin(teamIds, matchupFrequency));
+        }
+      }
+
+      // 2. Generate cross-division matchups based on rules
+      const divisionIds = Array.from(divisionTeams.keys());
+      for (let i = 0; i < divisionIds.length; i++) {
+        for (let j = i + 1; j < divisionIds.length; j++) {
+          const divA = divisionIds[i];
+          const divB = divisionIds[j];
+          if (canDivisionsPlay(divA === "__none__" ? null : divA, divB === "__none__" ? null : divB)) {
+            const teamsA = divisionTeams.get(divA) || [];
+            const teamsB = divisionTeams.get(divB) || [];
+            // Create matchups between all teams in divA and all teams in divB
+            for (const teamA of teamsA) {
+              for (const teamB of teamsB) {
+                for (let freq = 0; freq < matchupFrequency; freq++) {
+                  // Alternate home/away
+                  if (freq % 2 === 0) {
+                    allMatchups.push({ home: teamA, away: teamB, round: allMatchups.length + 1 });
+                  } else {
+                    allMatchups.push({ home: teamB, away: teamA, round: allMatchups.length + 1 });
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
   } else {
     // Per-division: separate round-robins for each division group
     const divisionGroups = new Map<string, string[]>();
