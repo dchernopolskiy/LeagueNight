@@ -131,8 +131,8 @@ export async function POST(request: NextRequest) {
   const effectiveLocationIds: string[] =
     locationIds.length > 0
       ? locationIds
-      : pattern.location_id
-        ? [pattern.location_id]
+      : pattern.location_ids?.length > 0
+        ? pattern.location_ids
         : [];
 
   // Fetch locations data for names
@@ -312,7 +312,7 @@ export async function POST(request: NextRequest) {
         court: g.court,
         week_number: g.weekNumber,
         status: "scheduled",
-        location_id: pattern.location_id || null,
+        location_id: pattern.location_ids?.[0] || null,
       });
     }
   }

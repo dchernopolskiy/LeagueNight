@@ -31,6 +31,8 @@ import {
   Trophy,
   Check,
   X,
+  Calendar,
+  MapPin,
 } from "lucide-react";
 import { format } from "date-fns";
 import { useLeagueRole } from "@/lib/league-role-context";
@@ -41,6 +43,7 @@ import type {
   Division,
   Game,
   Standing,
+  Location,
 } from "@/lib/types";
 import { generateBracketPdf } from "@/lib/export/bracket-pdf";
 
@@ -68,6 +71,7 @@ export default function PlayoffsPage() {
   const [divisions, setDivisions] = useState<Division[]>([]);
   const [games, setGames] = useState<Game[]>([]);
   const [standings, setStandings] = useState<Standing[]>([]);
+  const [locations, setLocations] = useState<Location[]>([]);
   const [leagueName, setLeagueName] = useState("");
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -93,12 +97,15 @@ export default function PlayoffsPage() {
 
   useEffect(() => {
     loadData();
+    function onFocus() { loadData(); }
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, [leagueId]);
 
   async function loadData() {
     const supabase = createClient();
 
-    const [bracketsRes, teamsRes, divisionsRes, standingsRes, leagueRes] =
+    const [bracketsRes, teamsRes, divisionsRes, standingsRes, leagueRes, locationsRes] =
       await Promise.all([
         supabase
           .from("brackets")
@@ -112,9 +119,17 @@ export default function PlayoffsPage() {
           .select("*")
           .eq("league_id", leagueId)
           .order("rank"),
-        supabase.from("leagues").select("name").eq("id", leagueId).single(),
+        supabase.from("leagues").select("name, organizer_id").eq("id", leagueId).single(),
+        supabase.from("locations").select("*").order("name"),
       ]);
     setLeagueName(leagueRes.data?.name || "");
+    // Filter locations to organizer's — locations belong to organizer, not league
+    const organizerId = leagueRes.data?.organizer_id;
+    setLocations(
+      ((locationsRes.data || []) as Location[]).filter(
+        (l) => l.organizer_id === organizerId
+      )
+    );
 
     const loadedBrackets = (bracketsRes.data || []) as Bracket[];
     setTeams((teamsRes.data || []) as Team[]);
@@ -195,37 +210,103 @@ export default function PlayoffsPage() {
       .eq("id", gameId);
 
     if (!error) {
-      // Advance winner in bracket slots
       const game = games.find((g) => g.id === gameId);
       if (game) {
-        const winnerId =
-          h > a ? game.home_team_id : game.away_team_id;
-        const loserId =
-          h > a ? game.away_team_id : game.home_team_id;
+        const winnerId = h > a ? game.home_team_id : game.away_team_id;
+        const loserId = h > a ? game.away_team_id : game.home_team_id;
 
-        // Find the bracket slots that reference this game
+        // Helper: parse a routing key like "W-2-0", "L-4-1", "GF-5-0"
+        // and find the first empty slot in that matchup
+        function findTargetSlot(
+          slots: BracketSlot[],
+          routingKey: string
+        ): BracketSlot | null {
+          // Format: PREFIX-ROUND-MATCHUP
+          const parts = routingKey.split("-");
+          const round = parseInt(parts[1]);
+          const matchup = parseInt(parts[2]);
+          // Matchup N means positions 2*N and 2*N+1
+          const pos0 = matchup * 2;
+          const pos1 = matchup * 2 + 1;
+          return (
+            slots.find(
+              (s) =>
+                s.round === round &&
+                (s.position === pos0 || s.position === pos1) &&
+                !s.team_id
+            ) || null
+          );
+        }
+
         for (const [bracketId, slots] of allSlots.entries()) {
           const matchSlots = slots.filter((s) => s.game_id === gameId);
-          if (matchSlots.length >= 2) {
-            const topSlot = matchSlots[0];
-            // Find where winner goes
-            if (topSlot.winner_to) {
-              const targetSlots = slots.filter(
-                (s) =>
-                  !s.team_id &&
-                  s.round > topSlot.round
-              );
-              // Try to find the slot this winner_to points to
-              for (const ts of targetSlots) {
-                const slotKey = `${ts.round}-${ts.position}`;
-                if (
-                  topSlot.winner_to.includes(`${ts.round}-${Math.floor(ts.position / 2)}`)
-                ) {
+          if (matchSlots.length < 2) continue;
+
+          const refSlot = matchSlots[0];
+
+          // Advance winner
+          if (refSlot.winner_to) {
+            const target = findTargetSlot(slots, refSlot.winner_to);
+            if (target) {
+              await supabase
+                .from("bracket_slots")
+                .update({ team_id: winnerId })
+                .eq("id", target.id);
+            }
+          }
+
+          // Advance loser (double elimination — loser drops to LB)
+          if (refSlot.loser_to) {
+            const target = findTargetSlot(slots, refSlot.loser_to);
+            if (target) {
+              await supabase
+                .from("bracket_slots")
+                .update({ team_id: loserId })
+                .eq("id", target.id);
+            }
+          }
+
+          // Auto-create games for matchups where both teams are now filled
+          // Re-read slots to get updated state
+          const { data: freshSlots } = await supabase
+            .from("bracket_slots")
+            .select("*")
+            .eq("bracket_id", bracketId)
+            .order("round")
+            .order("position");
+
+          if (freshSlots) {
+            const sorted = [...freshSlots].sort(
+              (a, b) => a.round - b.round || a.position - b.position
+            );
+            for (let si = 0; si < sorted.length; si += 2) {
+              const top = sorted[si];
+              const bot = sorted[si + 1];
+              if (
+                top &&
+                bot &&
+                top.team_id &&
+                bot.team_id &&
+                !top.game_id &&
+                !bot.game_id
+              ) {
+                const { data: newGame } = await supabase
+                  .from("games")
+                  .insert({
+                    league_id: leagueId,
+                    home_team_id: top.team_id,
+                    away_team_id: bot.team_id,
+                    scheduled_at: new Date().toISOString(),
+                    status: "scheduled",
+                    is_playoff: true,
+                  })
+                  .select("id")
+                  .single();
+                if (newGame) {
                   await supabase
                     .from("bracket_slots")
-                    .update({ team_id: winnerId })
-                    .eq("id", ts.id);
-                  break;
+                    .update({ game_id: newGame.id })
+                    .in("id", [top.id, bot.id]);
                 }
               }
             }
@@ -238,6 +319,25 @@ export default function PlayoffsPage() {
       setAwayScore("");
       await loadData();
     }
+  }
+
+  async function scheduleGame(
+    gameId: string,
+    scheduledAt: string,
+    locationId: string | null,
+    venue: string | null
+  ) {
+    const supabase = createClient();
+    const update: Record<string, unknown> = {
+      scheduled_at: scheduledAt,
+      location_id: locationId,
+      venue,
+    };
+    const { error } = await supabase
+      .from("games")
+      .update(update)
+      .eq("id", gameId);
+    if (!error) await loadData();
   }
 
   async function deleteBracket(bracketId: string) {
@@ -507,6 +607,7 @@ export default function PlayoffsPage() {
                     slots={bracketSlots}
                     teamsMap={teamsMap}
                     gamesMap={gamesMap}
+                    locations={locations}
                     format={bracket.format}
                     canManage={canManage}
                     scoringGame={scoringGame}
@@ -526,6 +627,7 @@ export default function PlayoffsPage() {
                     }}
                     onHomeScoreChange={setHomeScore}
                     onAwayScoreChange={setAwayScore}
+                    onScheduleGame={scheduleGame}
                   />
                 </CardContent>
               )}
@@ -543,6 +645,7 @@ function BracketView({
   slots,
   teamsMap,
   gamesMap,
+  locations,
   format,
   canManage,
   scoringGame,
@@ -553,10 +656,12 @@ function BracketView({
   onCancelScore,
   onHomeScoreChange,
   onAwayScoreChange,
+  onScheduleGame,
 }: {
   slots: BracketSlot[];
   teamsMap: Map<string, Team>;
   gamesMap: Map<string, Game>;
+  locations: Location[];
   format: "single_elimination" | "double_elimination";
   canManage: boolean;
   scoringGame: string | null;
@@ -567,6 +672,7 @@ function BracketView({
   onCancelScore: () => void;
   onHomeScoreChange: (v: string) => void;
   onAwayScoreChange: (v: string) => void;
+  onScheduleGame: (gameId: string, scheduledAt: string, locationId: string | null, venue: string | null) => void;
 }) {
   // Group slots into rounds
   const rounds = new Map<number, BracketSlot[]>();
@@ -577,30 +683,29 @@ function BracketView({
   }
   const sortedRounds = [...rounds.keys()].sort((a, b) => a - b);
 
-  // Determine winners bracket vs losers bracket rounds
-  // Winners bracket rounds have winner_to starting with "W-" or "GF-"
-  // Losers bracket rounds have winner_to starting with "L-" or their slots come from losers
+  // Determine winners bracket vs losers bracket rounds.
+  // WB rounds have loser_to set (they send losers to LB).
+  // GF is the last round with winner_to === null.
+  // Everything else is LB.
   const wbRounds: number[] = [];
   const lbRounds: number[] = [];
   const gfRounds: number[] = [];
 
   for (const roundNum of sortedRounds) {
     const roundSlots = rounds.get(roundNum) || [];
-    const hasWinner = roundSlots.some(
-      (s) => s.winner_to?.startsWith("W-") || s.winner_to?.startsWith("GF-")
-    );
-    const hasLoser = roundSlots.some((s) => s.winner_to?.startsWith("L-"));
-    const isGF = roundSlots.some(
-      (s) => s.winner_to === null && roundNum === sortedRounds[sortedRounds.length - 1]
-    );
 
     if (format === "double_elimination") {
-      if (isGF && roundNum === sortedRounds[sortedRounds.length - 1]) {
+      const isGF =
+        roundNum === sortedRounds[sortedRounds.length - 1] &&
+        roundSlots.some((s) => s.winner_to === null);
+      const isWB = roundSlots.some((s) => s.loser_to !== null);
+
+      if (isGF) {
         gfRounds.push(roundNum);
-      } else if (hasLoser) {
-        lbRounds.push(roundNum);
-      } else {
+      } else if (isWB) {
         wbRounds.push(roundNum);
+      } else {
+        lbRounds.push(roundNum);
       }
     } else {
       wbRounds.push(roundNum);
@@ -668,6 +773,7 @@ function BracketView({
             roundNums={wbRounds}
             matchupsByRound={wbMatchups}
             teamsMap={teamsMap}
+            locations={locations}
             canManage={canManage}
             labelFn={(r) =>
               format === "single_elimination"
@@ -684,6 +790,7 @@ function BracketView({
             onCancelScore={onCancelScore}
             onHomeScoreChange={onHomeScoreChange}
             onAwayScoreChange={onAwayScoreChange}
+            onScheduleGame={onScheduleGame}
           />
         </div>
       )}
@@ -698,6 +805,7 @@ function BracketView({
             roundNums={lbRounds}
             matchupsByRound={lbMatchups}
             teamsMap={teamsMap}
+            locations={locations}
             canManage={canManage}
             labelFn={(r) => roundLabel(r, lbRounds, "L")}
             scoringGame={scoringGame}
@@ -708,6 +816,7 @@ function BracketView({
             onCancelScore={onCancelScore}
             onHomeScoreChange={onHomeScoreChange}
             onAwayScoreChange={onAwayScoreChange}
+            onScheduleGame={onScheduleGame}
           />
         </div>
       )}
@@ -726,6 +835,7 @@ function BracketView({
             roundNums={gfRounds}
             matchupsByRound={gfMatchups}
             teamsMap={teamsMap}
+            locations={locations}
             canManage={canManage}
             labelFn={() => "Championship"}
             scoringGame={scoringGame}
@@ -736,6 +846,7 @@ function BracketView({
             onCancelScore={onCancelScore}
             onHomeScoreChange={onHomeScoreChange}
             onAwayScoreChange={onAwayScoreChange}
+            onScheduleGame={onScheduleGame}
           />
         </div>
       )}
@@ -749,6 +860,7 @@ function RoundColumns({
   roundNums,
   matchupsByRound,
   teamsMap,
+  locations,
   canManage,
   labelFn,
   scoringGame,
@@ -759,10 +871,12 @@ function RoundColumns({
   onCancelScore,
   onHomeScoreChange,
   onAwayScoreChange,
+  onScheduleGame,
 }: {
   roundNums: number[];
   matchupsByRound: Map<number, Matchup[]>;
   teamsMap: Map<string, Team>;
+  locations: Location[];
   canManage: boolean;
   labelFn: (round: number) => string;
   scoringGame: string | null;
@@ -773,6 +887,7 @@ function RoundColumns({
   onCancelScore: () => void;
   onHomeScoreChange: (v: string) => void;
   onAwayScoreChange: (v: string) => void;
+  onScheduleGame: (gameId: string, scheduledAt: string, locationId: string | null, venue: string | null) => void;
 }) {
   return (
     <div className="flex gap-2 overflow-x-auto pb-4">
@@ -803,6 +918,7 @@ function RoundColumns({
                   key={m.id}
                   matchup={m}
                   teamsMap={teamsMap}
+                  locations={locations}
                   canManage={canManage}
                   isScoring={scoringGame === m.game?.id}
                   homeScore={homeScore}
@@ -812,6 +928,7 @@ function RoundColumns({
                   onCancelScore={onCancelScore}
                   onHomeScoreChange={onHomeScoreChange}
                   onAwayScoreChange={onAwayScoreChange}
+                  onScheduleGame={onScheduleGame}
                 />
               ))}
             </div>
@@ -827,6 +944,7 @@ function RoundColumns({
 function MatchupCard({
   matchup,
   teamsMap,
+  locations,
   canManage,
   isScoring,
   homeScore,
@@ -836,9 +954,11 @@ function MatchupCard({
   onCancelScore,
   onHomeScoreChange,
   onAwayScoreChange,
+  onScheduleGame,
 }: {
   matchup: Matchup;
   teamsMap: Map<string, Team>;
+  locations: Location[];
   canManage: boolean;
   isScoring: boolean;
   homeScore: string;
@@ -848,7 +968,13 @@ function MatchupCard({
   onCancelScore: () => void;
   onHomeScoreChange: (v: string) => void;
   onAwayScoreChange: (v: string) => void;
+  onScheduleGame: (gameId: string, scheduledAt: string, locationId: string | null, venue: string | null) => void;
 }) {
+  const [scheduling, setScheduling] = useState(false);
+  const [schedDate, setSchedDate] = useState("");
+  const [schedTime, setSchedTime] = useState("");
+  const [schedLocationId, setSchedLocationId] = useState("");
+
   const { topSlot, bottomSlot, game } = matchup;
   const topTeam = topSlot.team_id ? teamsMap.get(topSlot.team_id) : null;
   const bottomTeam = bottomSlot.team_id
@@ -994,14 +1120,111 @@ function MatchupCard({
       )}
 
       {/* Venue/time info */}
-      {game && game.venue && (
+      {game && (game.venue || game.location_id) && (
         <div className="border-t px-2.5 py-1 bg-muted/20">
-          <p className="text-[10px] text-muted-foreground truncate">
-            {game.venue}
+          <p className="text-[10px] text-muted-foreground truncate flex items-center gap-1">
+            <MapPin className="h-2.5 w-2.5 shrink-0" />
+            {game.venue || locations.find((l) => l.id === game.location_id)?.name || ""}
             {game.court ? ` · ${game.court}` : ""}
-            {game.scheduled_at &&
-              ` · ${format(new Date(game.scheduled_at), "MMM d, h:mm a")}`}
           </p>
+        </div>
+      )}
+
+      {/* Scheduled date/time */}
+      {game && game.scheduled_at && (
+        <div className={`border-t px-2.5 py-1 ${game.venue || game.location_id ? "" : "bg-muted/20"}`}>
+          <p className="text-[10px] text-muted-foreground truncate flex items-center gap-1">
+            <Calendar className="h-2.5 w-2.5 shrink-0" />
+            {format(new Date(game.scheduled_at), "MMM d, h:mm a")}
+          </p>
+        </div>
+      )}
+
+      {/* Schedule game button / form */}
+      {canManage && game && !isCompleted && (
+        <div className="border-t bg-muted/20 px-2.5 py-1.5">
+          {scheduling ? (
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-1">
+                <Input
+                  type="date"
+                  value={schedDate}
+                  onChange={(e) => setSchedDate(e.target.value)}
+                  className="h-6 text-xs flex-1 px-1"
+                />
+                <Input
+                  type="time"
+                  value={schedTime}
+                  onChange={(e) => setSchedTime(e.target.value)}
+                  className="h-6 text-xs w-20 px-1"
+                />
+              </div>
+              {locations.length > 0 && (
+                <Select
+                  value={schedLocationId || "none"}
+                  onValueChange={(v) => v && setSchedLocationId(v === "none" ? "" : v)}
+                >
+                  <SelectTrigger className="h-6 text-xs">
+                    <SelectValue placeholder="Location" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No location</SelectItem>
+                    {locations.map((loc) => (
+                      <SelectItem key={loc.id} value={loc.id}>
+                        {loc.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              <div className="flex items-center gap-1">
+                <Button
+                  size="sm"
+                  className="h-6 text-xs flex-1"
+                  disabled={!schedDate || !schedTime}
+                  onClick={() => {
+                    const scheduledAt = new Date(`${schedDate}T${schedTime}`).toISOString();
+                    const loc = locations.find((l) => l.id === schedLocationId);
+                    onScheduleGame(
+                      game.id,
+                      scheduledAt,
+                      schedLocationId || null,
+                      loc?.name || null
+                    );
+                    setScheduling(false);
+                  }}
+                >
+                  <Check className="h-3 w-3 mr-1" />
+                  Save
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 text-xs"
+                  onClick={() => setScheduling(false)}
+                >
+                  <X className="h-3 w-3" />
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <button
+              className="text-[11px] text-primary hover:underline flex items-center gap-1"
+              onClick={() => {
+                // Pre-fill with existing values
+                if (game.scheduled_at) {
+                  const d = new Date(game.scheduled_at);
+                  setSchedDate(format(d, "yyyy-MM-dd"));
+                  setSchedTime(format(d, "HH:mm"));
+                }
+                setSchedLocationId(game.location_id || "");
+                setScheduling(true);
+              }}
+            >
+              <Calendar className="h-3 w-3" />
+              {game.scheduled_at && game.venue ? "Reschedule" : "Schedule"}
+            </button>
+          )}
         </div>
       )}
     </div>

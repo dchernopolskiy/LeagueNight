@@ -76,6 +76,7 @@ export interface BracketSlot {
   seed: number | null;
   game_id: string | null;
   winner_to: string | null;
+  loser_to: string | null;
   created_at: string;
 }
 
@@ -115,7 +116,6 @@ export interface GameDayPattern {
   duration_minutes: number;
   starts_on: string;
   ends_on: string | null;
-  location_id: string | null;
   location_ids: string[];
   end_time: string | null;
 }

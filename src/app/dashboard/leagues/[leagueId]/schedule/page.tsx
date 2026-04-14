@@ -185,6 +185,11 @@ export default function SchedulePage() {
 
   useEffect(() => {
     loadData();
+    // Re-fetch when the tab regains focus so stale unavailability data
+    // (added on the Locations page) gets picked up.
+    function onFocus() { loadData(); }
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, [leagueId]);
 
   async function loadData() {
@@ -233,7 +238,6 @@ export default function SchedulePage() {
     if (!startsOn) return;
     setAddingPattern(true);
     const supabase = createClient();
-    const primaryLocationId = selectedLocationIds[0] || null;
     const courtCount = computedCourtCount || 1;
     const { data, error } = await supabase
       .from("game_day_patterns")
@@ -246,7 +250,6 @@ export default function SchedulePage() {
         starts_on: startsOn,
         ends_on: endsOn || null,
         duration_minutes: parseInt(durationMinutes),
-        location_id: primaryLocationId,
         location_ids: selectedLocationIds,
         end_time: endTime || null,
       })
@@ -275,11 +278,7 @@ export default function SchedulePage() {
     setEditVenue(p.venue || "");
     setEditDurationMinutes((p.duration_minutes || 60).toString());
     // Prefer location_ids array; fall back to singular location_id for old rows
-    setEditSelectedLocationIds(
-      p.location_ids?.length > 0
-        ? p.location_ids
-        : p.location_id ? [p.location_id] : []
-    );
+    setEditSelectedLocationIds(p.location_ids || []);
     setEditEndTime(p.end_time ? p.end_time.slice(0, 5) : "");
     setEditStartsOn(p.starts_on);
     setEditEndsOn(p.ends_on || "");
@@ -288,7 +287,6 @@ export default function SchedulePage() {
   async function saveEditPattern() {
     if (!editingPattern) return;
     const supabase = createClient();
-    const primaryLocationId = editSelectedLocationIds[0] || null;
     const courtCount = editComputedCourtCount || 1;
     const { error } = await supabase
       .from("game_day_patterns")
@@ -298,7 +296,6 @@ export default function SchedulePage() {
         venue: editVenue || null,
         court_count: courtCount,
         duration_minutes: parseInt(editDurationMinutes),
-        location_id: primaryLocationId,
         location_ids: editSelectedLocationIds,
         end_time: editEndTime || null,
         starts_on: editStartsOn,
@@ -317,7 +314,6 @@ export default function SchedulePage() {
                 venue: editVenue || null,
                 court_count: courtCount,
                 duration_minutes: parseInt(editDurationMinutes),
-                location_id: primaryLocationId,
                 location_ids: editSelectedLocationIds,
                 end_time: editEndTime || null,
                 starts_on: editStartsOn,
@@ -362,8 +358,7 @@ export default function SchedulePage() {
   }
 
   function getLocationIdsForPattern(p: GameDayPattern): string[] {
-    if (p.location_ids?.length > 0) return p.location_ids;
-    return p.location_id ? [p.location_id] : [];
+    return p.location_ids || [];
   }
 
   async function generateSchedule(patternId: string) {
@@ -724,9 +719,7 @@ export default function SchedulePage() {
           </div>
 
           {patterns.map((p) => {
-            const patternLocIds = p.location_ids?.length > 0
-              ? p.location_ids
-              : p.location_id ? [p.location_id] : [];
+            const patternLocIds = p.location_ids || [];
             const patternLocNames = patternLocIds
               .map((id) => locationsMap.get(id)?.name)
               .filter(Boolean) as string[];
