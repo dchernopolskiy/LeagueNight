@@ -481,7 +481,7 @@ export default function ScoreboardPage() {
           </div>
 
           {/* Two-panel scoreboard */}
-          <div className="flex-1 flex">
+          <div className="flex-1 flex relative">
             {/* Home side — BLUE */}
             <div
               className="flex-1 bg-blue-600 flex flex-col items-center justify-center relative cursor-pointer active:bg-blue-700 transition-colors"
@@ -494,26 +494,27 @@ export default function ScoreboardPage() {
             >
               <span
                 className="text-white font-bold leading-none tabular-nums"
-                style={{ fontSize: "min(35vw, 35vh)" }}
+                style={{ fontSize: "min(40vw, 40vh)" }}
               >
                 {liveHome}
               </span>
 
+              {/* Label (optional - can show team initials or MVP/etc) */}
+              <div className="absolute bottom-3 left-0 right-0 text-center">
+                <span className="bg-blue-800/60 text-white/90 px-3 py-1 rounded text-xs font-medium inline-block">
+                  MVP
+                </span>
+              </div>
+
               {/* Desktop minus button */}
               {!isTouch && (
                 <button
-                  className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-blue-800/60 hover:bg-blue-800 text-white/70 hover:text-white rounded-full h-10 w-10 flex items-center justify-center transition-colors"
+                  className="absolute bottom-20 left-1/2 -translate-x-1/2 bg-blue-800/60 hover:bg-blue-800 text-white/70 hover:text-white rounded-full h-10 w-10 flex items-center justify-center transition-colors"
                   onClick={(e) => handleMinus("home", e)}
                 >
                   <Minus className="h-5 w-5" />
                 </button>
               )}
-
-              <div className="absolute bottom-4 left-0 right-0 text-center">
-                <span className="bg-blue-800/80 text-white px-4 py-1.5 rounded text-sm font-medium inline-block max-w-[90%] truncate">
-                  {activeGame.homeTeam.name}
-                </span>
-              </div>
             </div>
 
             {/* Away side — RED */}
@@ -528,73 +529,67 @@ export default function ScoreboardPage() {
             >
               <span
                 className="text-white font-bold leading-none tabular-nums"
-                style={{ fontSize: "min(35vw, 35vh)" }}
+                style={{ fontSize: "min(40vw, 40vh)" }}
               >
                 {liveAway}
               </span>
 
+              {/* Label */}
+              <div className="absolute bottom-3 left-0 right-0 text-center">
+                <span className="bg-red-800/60 text-white/90 px-3 py-1 rounded text-xs font-medium inline-block">
+                  Joust the Tip
+                </span>
+              </div>
+
               {/* Desktop minus button */}
               {!isTouch && (
                 <button
-                  className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-red-800/60 hover:bg-red-800 text-white/70 hover:text-white rounded-full h-10 w-10 flex items-center justify-center transition-colors"
+                  className="absolute bottom-20 left-1/2 -translate-x-1/2 bg-red-800/60 hover:bg-red-800 text-white/70 hover:text-white rounded-full h-10 w-10 flex items-center justify-center transition-colors"
                   onClick={(e) => handleMinus("away", e)}
                 >
                   <Minus className="h-5 w-5" />
                 </button>
               )}
+            </div>
 
-              <div className="absolute bottom-4 left-0 right-0 text-center">
-                <span className="bg-red-800/80 text-white px-4 py-1.5 rounded text-sm font-medium inline-block max-w-[90%] truncate">
-                  {activeGame.awayTeam.name}
+            {/* Sets indicator - bottom left corner (sets mode only) */}
+            {!isGameMode && (
+              <div className="absolute bottom-2 left-2 flex items-center gap-1.5">
+                {setScores.map((s, i) => (
+                  <button
+                    key={i}
+                    onClick={(e) => { e.stopPropagation(); setCurrentSet(i); }}
+                    className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${
+                      i === currentSet
+                        ? "bg-white text-black"
+                        : "bg-black/40 text-white/60 hover:bg-black/50"
+                    }`}
+                  >
+                    S{i + 1}
+                  </button>
+                ))}
+                <span className="text-white/40 text-[10px] ml-1">
+                  Sets: {homeSetWins}-{awaySetWins}
                 </span>
               </div>
-            </div>
-          </div>
+            )}
 
-          {/* Swipe hint on mobile */}
-          {isTouch && (
-            <div className="bg-black text-white/30 text-center text-[10px] py-0.5">
-              tap +1 · swipe down −1
+            {/* Submit button - bottom right corner */}
+            <div className="absolute bottom-2 right-2">
+              <Button
+                className="bg-green-600 hover:bg-green-700 text-white h-10 px-4 text-sm font-semibold shadow-lg"
+                onClick={submitScore}
+                disabled={saving || saved}
+              >
+                {saved ? (
+                  <><Check className="h-4 w-4 mr-1.5" /> {savedLabel}</>
+                ) : saving ? (
+                  "Saving..."
+                ) : (
+                  <><Check className="h-4 w-4 mr-1.5" /> {submitLabel}</>
+                )}
+              </Button>
             </div>
-          )}
-
-          {/* Sets bar (volleyball/sets mode only) */}
-          {!isGameMode && (
-            <div className="bg-black flex items-center justify-center gap-2 py-2">
-              {setScores.map((s, i) => (
-                <button
-                  key={i}
-                  onClick={(e) => { e.stopPropagation(); setCurrentSet(i); }}
-                  className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-                    i === currentSet
-                      ? "bg-white text-black"
-                      : "bg-white/20 text-white/70 hover:bg-white/30"
-                  }`}
-                >
-                  S{i + 1}{s.home > 0 || s.away > 0 ? `: ${s.home}-${s.away}` : ""}
-                </button>
-              ))}
-              <span className="text-white/50 text-xs ml-2">
-                Sets: {homeSetWins}-{awaySetWins}
-              </span>
-            </div>
-          )}
-
-          {/* Bottom submit bar */}
-          <div className="bg-black px-4 py-3 safe-area-pb">
-            <Button
-              className="w-full bg-green-600 hover:bg-green-700 text-white h-12 text-base font-semibold"
-              onClick={submitScore}
-              disabled={saving || saved}
-            >
-              {saved ? (
-                <><Check className="h-5 w-5 mr-2" /> {savedLabel}</>
-              ) : saving ? (
-                "Saving..."
-              ) : (
-                <><Check className="h-5 w-5 mr-2" /> {submitLabel}</>
-              )}
-            </Button>
           </div>
         </div>
       );
