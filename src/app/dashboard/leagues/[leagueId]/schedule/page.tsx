@@ -48,6 +48,7 @@ export default function SchedulePage() {
   const [locationUnavail, setLocationUnavail] = useState<LocationUnavailability[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [schedulingWarnings, setSchedulingWarnings] = useState<string[]>([]);
   const router = useRouter();
 
   // (Pattern form state lives in GameDaySetupPanel)
@@ -135,7 +136,15 @@ export default function SchedulePage() {
     });
 
     if (res.ok) {
+      const data = await res.json();
+      if (data.warnings && data.warnings.length > 0) {
+        setSchedulingWarnings(data.warnings);
+      } else {
+        setSchedulingWarnings([]);
+      }
       await loadData();
+    } else {
+      setSchedulingWarnings([]);
     }
     setGenerating(false);
   }
@@ -344,6 +353,25 @@ export default function SchedulePage() {
           />
         </CardContent>
       </Card>
+
+      {/* Scheduling Warnings */}
+      {schedulingWarnings.length > 0 && (
+        <Card className="border-amber-200 bg-amber-50/50">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2 text-amber-700">
+              <AlertTriangle className="h-4 w-4" />
+              Scheduling Capacity Warning
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {schedulingWarnings.map((warning, idx) => (
+              <p key={idx} className="text-sm text-amber-700">
+                {warning}
+              </p>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {games.length > 0 && (
         <Card>

@@ -41,8 +41,13 @@ import {
   Pencil,
   Trash2,
   ArrowRightLeft,
+  Settings2,
+  Calendar,
+  X,
 } from "lucide-react";
-import type { Team, Player, Division } from "@/lib/types";
+import type { Team, Player, Division, TeamPreferences } from "@/lib/types";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
 import { useRouter } from "next/navigation";
 
 export function TeamsManager({
@@ -84,6 +89,17 @@ export function TeamsManager({
   // Delete team dialog
   const [deletingTeamId, setDeletingTeamId] = useState<string | null>(null);
   const [moveToSubPool, setMoveToSubPool] = useState(true);
+
+  // Team preferences dialog
+  const [editingPreferencesTeamId, setEditingPreferencesTeamId] = useState<string | null>(null);
+  const [preferredTime, setPreferredTime] = useState<"early" | "late" | "">("");
+  const [preferredDays, setPreferredDays] = useState<string[]>([]);
+  const [byeDates, setByeDates] = useState<string[]>([]);
+  const [newByeDate, setNewByeDate] = useState("");
+  const [weekPreferences, setWeekPreferences] = useState<Record<string, "early" | "late">>({});
+  const [newWeekNum, setNewWeekNum] = useState("");
+  const [newWeekTime, setNewWeekTime] = useState<"early" | "late" | "">("");
+  const [preferencesNotes, setPreferencesNotes] = useState("");
 
   const router = useRouter();
 
@@ -271,6 +287,91 @@ export function TeamsManager({
     if (!error) {
       setPlayers(players.filter((p) => p.id !== playerId));
     }
+  }
+
+  function openTeamPreferences(team: Team) {
+    setEditingPreferencesTeamId(team.id);
+    const prefs = team.preferences || {};
+    setPreferredTime(prefs.preferred_time || "");
+    setPreferredDays(prefs.preferred_days || []);
+    setByeDates(prefs.bye_dates || []);
+    setWeekPreferences(prefs.week_preferences || {});
+    setPreferencesNotes(prefs.notes || "");
+    setNewByeDate("");
+    setNewWeekNum("");
+    setNewWeekTime("");
+  }
+
+  function closeTeamPreferences() {
+    setEditingPreferencesTeamId(null);
+    setPreferredTime("");
+    setPreferredDays([]);
+    setByeDates([]);
+    setWeekPreferences({});
+    setPreferencesNotes("");
+    setNewByeDate("");
+    setNewWeekNum("");
+    setNewWeekTime("");
+  }
+
+  async function saveTeamPreferences() {
+    if (!editingPreferencesTeamId) return;
+
+    const preferences: TeamPreferences = {
+      preferred_time: preferredTime || null,
+      preferred_days: preferredDays.length > 0 ? preferredDays : undefined,
+      bye_dates: byeDates.length > 0 ? byeDates : undefined,
+      week_preferences: Object.keys(weekPreferences).length > 0 ? weekPreferences : undefined,
+      notes: preferencesNotes.trim() || undefined,
+    };
+
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("teams")
+      .update({ preferences })
+      .eq("id", editingPreferencesTeamId);
+
+    if (!error) {
+      setTeams(
+        teams.map((t) =>
+          t.id === editingPreferencesTeamId ? { ...t, preferences } : t
+        )
+      );
+      closeTeamPreferences();
+    }
+  }
+
+  function toggleDay(day: string) {
+    if (preferredDays.includes(day)) {
+      setPreferredDays(preferredDays.filter(d => d !== day));
+    } else {
+      setPreferredDays([...preferredDays, day]);
+    }
+  }
+
+  function addByeDate() {
+    if (newByeDate && !byeDates.includes(newByeDate)) {
+      setByeDates([...byeDates, newByeDate].sort());
+      setNewByeDate("");
+    }
+  }
+
+  function removeByeDate(date: string) {
+    setByeDates(byeDates.filter(d => d !== date));
+  }
+
+  function addWeekPreference() {
+    if (newWeekNum && newWeekTime && !weekPreferences[newWeekNum]) {
+      setWeekPreferences({ ...weekPreferences, [newWeekNum]: newWeekTime });
+      setNewWeekNum("");
+      setNewWeekTime("");
+    }
+  }
+
+  function removeWeekPreference(week: string) {
+    const newPrefs = { ...weekPreferences };
+    delete newPrefs[week];
+    setWeekPreferences(newPrefs);
   }
 
   function copyInviteLink(token: string) {
@@ -531,6 +632,10 @@ export function TeamsManager({
                             <Pencil className="h-3.5 w-3.5 mr-1.5" />
                             Rename team
                           </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => openTeamPreferences(team)}>
+                            <Settings2 className="h-3.5 w-3.5 mr-1.5" />
+                            Scheduling preferences
+                          </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
                             variant="destructive"
@@ -722,6 +827,171 @@ export function TeamsManager({
                 <Button variant="destructive" onClick={confirmDeleteTeam}>
                   <Trash2 className="h-4 w-4 mr-1" />
                   Delete Team
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Team Preferences Dialog */}
+      {editingPreferencesTeamId && (
+        <Dialog open={editingPreferencesTeamId !== null} onOpenChange={(open) => !open && closeTeamPreferences()}>
+          <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Settings2 className="h-5 w-5" />
+                Scheduling Preferences: {teams.find(t => t.id === editingPreferencesTeamId)?.name}
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-6 pt-4">
+              {/* Preferred Time */}
+              <div className="space-y-2">
+                <Label htmlFor="pref-time" className="text-sm font-medium">
+                  Preferred Game Time
+                </Label>
+                <Select value={preferredTime} onValueChange={(v) => setPreferredTime(v as "early" | "late" | "")}>
+                  <SelectTrigger id="pref-time">
+                    <SelectValue placeholder="No preference" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">No preference</SelectItem>
+                    <SelectItem value="early">Early games</SelectItem>
+                    <SelectItem value="late">Late games</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Team requests to play either early or late time slots when possible
+                </p>
+              </div>
+
+              {/* Preferred Days */}
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Preferred Days of Week</Label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((day) => (
+                    <label key={day} className="flex items-center gap-2 cursor-pointer hover:bg-accent rounded px-2 py-1.5 transition-colors">
+                      <Checkbox
+                        checked={preferredDays.includes(day)}
+                        onCheckedChange={() => toggleDay(day)}
+                      />
+                      <span className="text-sm">{day.slice(0, 3)}</span>
+                    </label>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Select days when the team prefers to play
+                </p>
+              </div>
+
+              {/* Bye Dates */}
+              <div className="space-y-2">
+                <Label className="text-sm font-medium flex items-center gap-2">
+                  <Calendar className="h-4 w-4" />
+                  Requested Bye Dates
+                </Label>
+                {byeDates.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    {byeDates.map((date) => (
+                      <Badge key={date} variant="secondary" className="flex items-center gap-1">
+                        {new Date(date + "T00:00:00").toLocaleDateString()}
+                        <button
+                          onClick={() => removeByeDate(date)}
+                          className="hover:text-destructive"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <Input
+                    type="date"
+                    value={newByeDate}
+                    onChange={(e) => setNewByeDate(e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button variant="outline" onClick={addByeDate} disabled={!newByeDate}>
+                    Add
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Request specific dates when the team needs a bye week (e.g., team event, holiday)
+                </p>
+              </div>
+
+              {/* Week-Specific Preferences */}
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Week-Specific Time Preferences</Label>
+                {Object.keys(weekPreferences).length > 0 && (
+                  <div className="space-y-1 mb-2">
+                    {Object.entries(weekPreferences).map(([week, time]) => (
+                      <div key={week} className="flex items-center justify-between border rounded px-3 py-2">
+                        <span className="text-sm">
+                          Week {week}: <Badge variant="outline">{time === "early" ? "Early" : "Late"}</Badge>
+                        </span>
+                        <button
+                          onClick={() => removeWeekPreference(week)}
+                          className="text-muted-foreground hover:text-destructive"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <Input
+                    type="number"
+                    min="1"
+                    placeholder="Week #"
+                    value={newWeekNum}
+                    onChange={(e) => setNewWeekNum(e.target.value)}
+                    className="w-24"
+                  />
+                  <Select value={newWeekTime} onValueChange={(v) => setNewWeekTime(v as "early" | "late")}>
+                    <SelectTrigger className="flex-1">
+                      <SelectValue placeholder="Time preference" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="early">Early</SelectItem>
+                      <SelectItem value="late">Late</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button variant="outline" onClick={addWeekPreference} disabled={!newWeekNum || !newWeekTime}>
+                    Add
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Request early or late games for specific weeks (e.g., weeks 1 and 3 need late games)
+                </p>
+              </div>
+
+              {/* Notes */}
+              <div className="space-y-2">
+                <Label htmlFor="pref-notes" className="text-sm font-medium">
+                  Additional Notes
+                </Label>
+                <Textarea
+                  id="pref-notes"
+                  value={preferencesNotes}
+                  onChange={(e) => setPreferencesNotes(e.target.value)}
+                  placeholder="Any other scheduling requests or constraints..."
+                  rows={3}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Optional notes about scheduling needs or constraints
+                </p>
+              </div>
+
+              <div className="flex gap-2 justify-end pt-4 border-t">
+                <Button variant="outline" onClick={closeTeamPreferences}>
+                  Cancel
+                </Button>
+                <Button onClick={saveTeamPreferences}>
+                  <Check className="h-4 w-4 mr-2" />
+                  Save Preferences
                 </Button>
               </div>
             </div>

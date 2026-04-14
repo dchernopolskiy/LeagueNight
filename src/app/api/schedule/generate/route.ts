@@ -281,7 +281,7 @@ export async function POST(request: NextRequest) {
       dayOfWeek: pattern.day_of_week,
       startTime: pattern.start_time,
       endTime: pattern.end_time || null,
-      venue: pattern.venue,
+      venue: null, // Don't use pattern venue - will be set per location below
       courtCount: totalCourts,
       startsOn: effectiveStartsOn,
       durationMinutes: pattern.duration_minutes || 60,
@@ -289,6 +289,16 @@ export async function POST(request: NextRequest) {
     },
     gamesPerSession
   );
+
+  // Check if we scheduled all matchups (capacity warning)
+  const schedulingWarnings: string[] = [];
+  if (scheduled.length < allMatchups.length) {
+    const missedGames = allMatchups.length - scheduled.length;
+    schedulingWarnings.push(
+      `Unable to schedule ${missedGames} of ${allMatchups.length} games within the available time slots. ` +
+      `Consider: (1) Adding more courts, (2) Extending game day hours, (3) Adding more game days, or (4) Reducing matchup frequency.`
+    );
+  }
 
   // Persist scheduling settings back to the pattern for self-contained regeneration
   await supabase
@@ -407,5 +417,8 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({
     games: insertedGames,
     count: insertedGames?.length || 0,
+    warnings: schedulingWarnings.length > 0 ? schedulingWarnings : undefined,
+    totalMatchups: allMatchups.length,
+    scheduledGames: scheduled.length,
   });
 }

@@ -91,6 +91,14 @@ export interface BracketSlot {
   created_at: string;
 }
 
+export interface TeamPreferences {
+  preferred_time?: "early" | "late" | null;
+  preferred_days?: string[];
+  bye_dates?: string[];
+  week_preferences?: Record<string, "early" | "late">;
+  notes?: string;
+}
+
 export interface Team {
   id: string;
   league_id: string;
@@ -98,6 +106,7 @@ export interface Team {
   color: string | null;
   captain_player_id: string | null;
   division_id: string | null;
+  preferences?: TeamPreferences;
   created_at: string;
 }
 
