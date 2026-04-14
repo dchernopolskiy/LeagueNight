@@ -176,6 +176,25 @@ export async function POST(request: NextRequest) {
   }
   const mergedSkipDates = Array.from(new Set([...skipDates, ...fullyUnavailDates]));
 
+  // If regenerating, fetch completed games to avoid duplicate matchups
+  let completedMatchups = new Set<string>();
+  if (regenerateFrom) {
+    const { data: completedGames } = await supabase
+      .from("games")
+      .select("home_team_id, away_team_id")
+      .eq("league_id", leagueId)
+      .eq("status", "completed")
+      .eq("is_playoff", false);
+
+    if (completedGames) {
+      for (const game of completedGames) {
+        // Store both directions of the matchup (A-B and B-A are the same matchup)
+        const [teamA, teamB] = [game.home_team_id, game.away_team_id].sort();
+        completedMatchups.add(`${teamA}-${teamB}`);
+      }
+    }
+  }
+
   // Generate round-robin matchups
   let allMatchups: ReturnType<typeof generateRoundRobin>;
 
@@ -265,6 +284,18 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Filter out matchups that already happened (when regenerating)
+  let skippedCompletedMatchups = 0;
+  if (regenerateFrom && completedMatchups.size > 0) {
+    const originalCount = allMatchups.length;
+    allMatchups = allMatchups.filter((matchup) => {
+      const [teamA, teamB] = [matchup.home, matchup.away].sort();
+      const matchupKey = `${teamA}-${teamB}`;
+      return !completedMatchups.has(matchupKey);
+    });
+    skippedCompletedMatchups = originalCount - allMatchups.length;
+  }
+
   // Assign dates — use total courts across all selected locations
   // Append T00:00:00 to force local-time parsing (date-only strings like
   // "2026-04-06" are parsed as UTC midnight, which shifts the day backward
@@ -292,6 +323,14 @@ export async function POST(request: NextRequest) {
 
   // Check if we scheduled all matchups (capacity warning)
   const schedulingWarnings: string[] = [];
+
+  // Add info about skipped completed matchups when regenerating
+  if (skippedCompletedMatchups > 0) {
+    schedulingWarnings.push(
+      `Skipped ${skippedCompletedMatchups} matchup${skippedCompletedMatchups > 1 ? 's' : ''} that already completed.`
+    );
+  }
+
   if (scheduled.length < allMatchups.length) {
     const missedGames = allMatchups.length - scheduled.length;
     schedulingWarnings.push(
