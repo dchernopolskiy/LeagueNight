@@ -1,0 +1,49 @@
+{
+  "hooks": {
+    "afterFileEdit": [
+      {
+        "command": "scavenger hook after-file-edit"
+      },
+      {
+        "command": "scavenger hook audit"
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "command": "scavenger hook audit"
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "scavenger hook audit"
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "scavenger hook audit"
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "scavenger hook session-end"
+      },
+      {
+        "command": "scavenger hook audit"
+      }
+    ],
+    "sessionStart": [
+      {
+        "command": "scavenger hook session-start"
+      },
+      {
+        "command": "scavenger hook audit"
+      }
+    ],
+    "stop": [
+      {
+        "command": "scavenger hook audit"
+      }
+    ]
+  },
+  "version": 1
+}

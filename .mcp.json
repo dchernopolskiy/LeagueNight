@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "scavenger": {
+      "args": [
+        "mcp-bridge"
+      ],
+      "command": "scavenger"
+    }
+  }
+}

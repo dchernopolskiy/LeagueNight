@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "scavenger": {
+      "args": [
+        "mcp-bridge"
+      ],
+      "command": "scavenger",
+      "cwd": "/Users/dan/Documents/Projects/BenchWarmer"
+    }
+  }
+}
