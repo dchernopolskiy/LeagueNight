@@ -32,6 +32,7 @@ import { generateSchedulePdf } from "@/lib/export/schedule-pdf";
 import type { Game, Team, GameDayPattern, League, Player, Location, LocationUnavailability } from "@/lib/types";
 import { useLeagueRole } from "@/lib/league-role-context";
 import { GameDaySetupPanel } from "@/components/dashboard/game-day-setup";
+import { useLeagueData, useLocations } from "@/lib/hooks";
 
 
 export default function SchedulePage() {
@@ -39,19 +40,67 @@ export default function SchedulePage() {
   const { canManage } = useLeagueRole();
   const searchParams = useSearchParams();
   const activeDivisionId = searchParams.get("division");
-  const [games, setGames] = useState<Game[]>([]);
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [patterns, setPatterns] = useState<GameDayPattern[]>([]);
-  const [players, setPlayers] = useState<Player[]>([]);
-  const [league, setLeague] = useState<League | null>(null);
-  const [locations, setLocations] = useState<Location[]>([]);
-  const [locationUnavail, setLocationUnavail] = useState<LocationUnavailability[]>([]);
-  const [loading, setLoading] = useState(true);
+
+  // Use custom hooks for data fetching
+  const {
+    league,
+    teams,
+    games: allGames,
+    patterns,
+    players,
+    loading: leagueLoading,
+    refetch: refetchLeague,
+  } = useLeagueData(leagueId);
+
+  // Filter to non-playoff games only
+  const games = useMemo(
+    () => allGames.filter((g) => !g.is_playoff),
+    [allGames]
+  );
+
   const [generating, setGenerating] = useState(false);
   const [schedulingWarnings, setSchedulingWarnings] = useState<string[]>([]);
   const router = useRouter();
 
-  // (Pattern form state lives in GameDaySetupPanel)
+  // Fetch locations separately (organizer-scoped, not league-scoped)
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [locationUnavail, setLocationUnavail] = useState<LocationUnavailability[]>([]);
+  const [locationsLoading, setLocationsLoading] = useState(true);
+
+  useEffect(() => {
+    loadLocations();
+    // Re-fetch when the tab regains focus so stale unavailability data
+    // (added on the Locations page) gets picked up.
+    function onFocus() {
+      refetchLeague();
+      loadLocations();
+    }
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [leagueId]);
+
+  async function loadLocations() {
+    const supabase = createClient();
+    const { data: locationsRes } = await supabase
+      .from("locations")
+      .select("*")
+      .order("name");
+
+    const locs = (locationsRes || []) as Location[];
+    setLocations(locs);
+
+    if (locs.length > 0) {
+      const { data: unavailData } = await supabase
+        .from("location_unavailability")
+        .select("*")
+        .in("location_id", locs.map((l) => l.id))
+        .order("unavailable_date");
+      setLocationUnavail((unavailData || []) as LocationUnavailability[]);
+    }
+    setLocationsLoading(false);
+  }
+
+  const loading = leagueLoading || locationsLoading;
 
   // Inline game editing
   const [editingGameId, setEditingGameId] = useState<string | null>(null);
@@ -65,46 +114,6 @@ export default function SchedulePage() {
   const [conflictMoveTargets, setConflictMoveTargets] = useState<Record<string, string>>({});
   const [conflictRescheduleDates, setConflictRescheduleDates] = useState<Record<string, string>>({});
   const [applyingAll, setApplyingAll] = useState(false);
-
-
-  useEffect(() => {
-    loadData();
-    // Re-fetch when the tab regains focus so stale unavailability data
-    // (added on the Locations page) gets picked up.
-    function onFocus() { loadData(); }
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [leagueId]);
-
-  async function loadData() {
-    const supabase = createClient();
-    const [gamesRes, teamsRes, patternsRes, playersRes, leagueRes, locationsRes] =
-      await Promise.all([
-        supabase.from("games").select("*").eq("league_id", leagueId).eq("is_playoff", false).order("scheduled_at"),
-        supabase.from("teams").select("*").eq("league_id", leagueId),
-        supabase.from("game_day_patterns").select("*").eq("league_id", leagueId),
-        supabase.from("players").select("*").eq("league_id", leagueId).order("name"),
-        supabase.from("leagues").select("*").eq("id", leagueId).single(),
-        supabase.from("locations").select("*").order("name"),
-      ]);
-    setGames((gamesRes.data || []) as Game[]);
-    setTeams((teamsRes.data || []) as Team[]);
-    setPatterns((patternsRes.data || []) as GameDayPattern[]);
-    setPlayers((playersRes.data || []) as Player[]);
-    if (leagueRes.data) setLeague(leagueRes.data as League);
-    const locs = (locationsRes.data || []) as Location[];
-    setLocations(locs);
-
-    if (locs.length > 0) {
-      const { data: unavailData } = await supabase
-        .from("location_unavailability")
-        .select("*")
-        .in("location_id", locs.map((l) => l.id))
-        .order("unavailable_date");
-      setLocationUnavail((unavailData || []) as LocationUnavailability[]);
-    }
-    setLoading(false);
-  }
 
   async function generateSchedule(
     patternId: string,
@@ -142,7 +151,7 @@ export default function SchedulePage() {
       } else {
         setSchedulingWarnings([]);
       }
-      await loadData();
+      await refetchLeague();
     } else {
       setSchedulingWarnings([]);
     }
@@ -158,7 +167,7 @@ export default function SchedulePage() {
   async function cancelGame(gameId: string) {
     const supabase = createClient();
     await supabase.from("games").update({ status: "cancelled" }).eq("id", gameId);
-    setGames(games.map((g) => (g.id === gameId ? { ...g, status: "cancelled" as const } : g)));
+    await refetchLeague();
   }
 
   function startEditGame(game: Game) {
@@ -186,13 +195,7 @@ export default function SchedulePage() {
       .eq("id", editingGameId);
 
     if (!error) {
-      setGames(
-        games.map((g) =>
-          g.id === editingGameId
-            ? { ...g, scheduled_at: scheduledAt.toISOString(), venue: editGameVenue || null, home_team_id: editHome, away_team_id: editAway }
-            : g
-        )
-      );
+      await refetchLeague();
       setEditingGameId(null);
     }
   }
@@ -242,11 +245,7 @@ export default function SchedulePage() {
       .update({ location_id: locationId, venue: loc.name })
       .eq("id", gameId);
     if (!error) {
-      setGames(
-        games.map((g) =>
-          g.id === gameId ? { ...g, location_id: locationId, venue: loc.name } : g
-        )
-      );
+      await refetchLeague();
     }
   }
 
@@ -262,11 +261,7 @@ export default function SchedulePage() {
       .update({ scheduled_at: newScheduledAt.toISOString() })
       .eq("id", gameId);
     if (!error) {
-      setGames(
-        games.map((g) =>
-          g.id === gameId ? { ...g, scheduled_at: newScheduledAt.toISOString() } : g
-        )
-      );
+      await refetchLeague();
     }
   }
 
@@ -274,35 +269,23 @@ export default function SchedulePage() {
     const supabase = createClient();
     const { error } = await supabase.from("games").update({ status: "cancelled" }).eq("id", gameId);
     if (!error) {
-      setGames(games.map((g) => (g.id === gameId ? { ...g, status: "cancelled" as const } : g)));
+      await refetchLeague();
     }
   }
 
   async function applyAllSuggestions() {
     setApplyingAll(true);
     const supabase = createClient();
-    const updates: Game[] = [];
     for (const game of conflictedGames) {
       const suggested = getSuggestedLocation(game);
       if (suggested) {
-        const { error } = await supabase
+        await supabase
           .from("games")
           .update({ location_id: suggested.id, venue: suggested.name })
           .eq("id", game.id);
-        if (!error) {
-          updates.push({ ...game, location_id: suggested.id, venue: suggested.name });
-        }
       }
     }
-    if (updates.length > 0) {
-      const updatedIds = new Set(updates.map((u) => u.id));
-      setGames(
-        games.map((g) => {
-          const updated = updates.find((u) => u.id === g.id);
-          return updated || g;
-        })
-      );
-    }
+    await refetchLeague();
     setApplyingAll(false);
   }
 
@@ -347,8 +330,13 @@ export default function SchedulePage() {
             teamCount={teams.length}
             canManage={canManage}
             generating={generating}
-            onPatternsChange={setPatterns}
-            onLocationsChange={setLocations}
+            onPatternsChange={async () => {
+              await refetchLeague();
+              await loadLocations();
+            }}
+            onLocationsChange={async () => {
+              await loadLocations();
+            }}
             onGenerate={generateSchedule}
           />
         </CardContent>
