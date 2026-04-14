@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -34,21 +34,40 @@ import {
   Archive,
   ArchiveRestore,
   OctagonX,
-  Copy,
   Check,
 } from "lucide-react";
-import type { League, LeagueSettings, Team, Player, Game, Division, LeagueStaff, DivisionCrossPlay } from "@/lib/types";
+import type { LeagueStaff } from "@/lib/types";
+import { useLeagueData } from "@/lib/hooks";
 import { PublicLinkCopy } from "@/components/dashboard/public-link-copy";
 
 export default function LeagueOverviewPage() {
   const { leagueId } = useParams<{ leagueId: string }>();
   const router = useRouter();
 
-  // Overview state
-  const [league, setLeague] = useState<League | null>(null);
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [players, setPlayers] = useState<Player[]>([]);
-  const [upcomingGames, setUpcomingGames] = useState<Game[]>([]);
+  // Use custom hook for all league data
+  const {
+    league,
+    teams,
+    players,
+    games,
+    divisions,
+    crossPlayRules,
+    loading,
+    refetch,
+  } = useLeagueData(leagueId);
+
+  // Upcoming games
+  const upcomingGames = useMemo(() => {
+    const now = new Date();
+    return games
+      .filter((g) => new Date(g.scheduled_at) > now && g.status === "scheduled")
+      .slice(0, 5);
+  }, [games]);
+
+  // Local staff state with profiles (from hook staff + fetch profiles)
+  const [staff, setStaff] = useState<(LeagueStaff & { profile?: { full_name: string; email: string } })[]>([]);
+  const [currentProfileId, setCurrentProfileId] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   // Settings state
   const [name, setName] = useState("");
@@ -60,24 +79,18 @@ export default function LeagueOverviewPage() {
   const [seasonEnd, setSeasonEnd] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   // Divisions state
-  const [divisions, setDivisions] = useState<Division[]>([]);
   const [newDivName, setNewDivName] = useState("");
   const [newDivLevel, setNewDivLevel] = useState("1");
   const [addingDiv, setAddingDiv] = useState(false);
 
   // Cross-division play state
-  const [crossPlayRules, setCrossPlayRules] = useState<DivisionCrossPlay[]>([]);
   const [selectedDivisionA, setSelectedDivisionA] = useState<string>("");
   const [selectedDivisionB, setSelectedDivisionB] = useState<string>("");
   const [addingCrossPlay, setAddingCrossPlay] = useState(false);
 
   // Co-organizer state
-  const [staff, setStaff] = useState<(LeagueStaff & { profile?: { full_name: string; email: string } })[]>([]);
-  const [currentProfileId, setCurrentProfileId] = useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"admin" | "manager">("manager");
   const [inviting, setInviting] = useState(false);
@@ -90,57 +103,25 @@ export default function LeagueOverviewPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmName, setDeleteConfirmName] = useState("");
 
+  // Initialize form fields from league data
   useEffect(() => {
-    async function load() {
+    if (league) {
+      setName(league.name);
+      setDescription(league.description || "");
+      setSeasonName(league.season_name || "");
+      setSeasonStart(league.season_start || "");
+      setSeasonEnd(league.season_end || "");
+      const settings = league.settings;
+      setScoringMode(settings?.scoring_mode || "game");
+      setSetsToWin(String(settings?.sets_to_win || 2));
+    }
+  }, [league]);
+
+  // Load staff with profiles and current user
+  useEffect(() => {
+    async function loadStaffAndUser() {
+      if (!leagueId) return;
       const supabase = createClient();
-
-      // Load league data
-      const { data: leagueData } = await supabase
-        .from("leagues")
-        .select("*")
-        .eq("id", leagueId)
-        .single();
-
-      if (leagueData) {
-        const l = leagueData as League;
-        setLeague(l);
-        setName(l.name);
-        setDescription(l.description || "");
-        setSeasonName(l.season_name || "");
-        setSeasonStart(l.season_start || "");
-        setSeasonEnd(l.season_end || "");
-        const settings = l.settings as LeagueSettings;
-        setScoringMode(settings.scoring_mode || "game");
-        setSetsToWin(String(settings.sets_to_win || 2));
-      }
-
-      // Load overview data
-      const [teamsRes, playersRes, gamesRes, divsRes, crossPlayRes] = await Promise.all([
-        supabase.from("teams").select("*").eq("league_id", leagueId),
-        supabase.from("players").select("*").eq("league_id", leagueId),
-        supabase
-          .from("games")
-          .select("*")
-          .eq("league_id", leagueId)
-          .eq("status", "scheduled")
-          .order("scheduled_at")
-          .limit(5),
-        supabase
-          .from("divisions")
-          .select("*")
-          .eq("league_id", leagueId)
-          .order("level"),
-        supabase
-          .from("division_cross_play")
-          .select("*")
-          .eq("league_id", leagueId),
-      ]);
-
-      setTeams((teamsRes.data || []) as Team[]);
-      setPlayers((playersRes.data || []) as Player[]);
-      setUpcomingGames((gamesRes.data || []) as Game[]);
-      setDivisions((divsRes.data || []) as Division[]);
-      setCrossPlayRules((crossPlayRes.data || []) as DivisionCrossPlay[]);
 
       // Load current user profile
       const { data: { user } } = await supabase.auth.getUser();
@@ -152,19 +133,19 @@ export default function LeagueOverviewPage() {
           .single();
         if (profile) {
           setCurrentProfileId(profile.id);
-          setIsAdmin(leagueData?.organizer_id === profile.id);
+          setIsAdmin(league?.organizer_id === profile.id);
         }
       }
 
-      // Load co-organizer staff
+      // Load co-organizer staff with profiles
       const { data: staffData } = await supabase
         .from("league_staff")
         .select("*, profile:profiles!league_staff_profile_id_fkey(full_name, email)")
         .eq("league_id", leagueId);
       if (staffData) setStaff(staffData as any);
     }
-    load();
-  }, [leagueId]);
+    loadStaffAndUser();
+  }, [leagueId, league?.organizer_id]);
 
   async function saveSettings() {
     setSaving(true);
@@ -187,26 +168,24 @@ export default function LeagueOverviewPage() {
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
     setSaving(false);
-    router.refresh();
+    await refetch();
   }
 
   async function addDivision() {
     if (!newDivName.trim()) return;
     setAddingDiv(true);
     const supabase = createClient();
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from("divisions")
       .insert({
         league_id: leagueId,
         name: newDivName.trim(),
         level: parseInt(newDivLevel) || 1,
-      })
-      .select()
-      .single();
-    if (!error && data) {
-      setDivisions([...divisions, data as Division]);
+      });
+    if (!error) {
       setNewDivName("");
       setNewDivLevel("1");
+      await refetch();
     }
     setAddingDiv(false);
   }
@@ -218,11 +197,7 @@ export default function LeagueOverviewPage() {
       .delete()
       .eq("id", divId);
     if (!error) {
-      setDivisions(divisions.filter((d) => d.id !== divId));
-      // Also remove any cross-play rules involving this division
-      setCrossPlayRules(crossPlayRules.filter(
-        (rule) => rule.division_a_id !== divId && rule.division_b_id !== divId
-      ));
+      await refetch();
     }
   }
 
@@ -238,20 +213,18 @@ export default function LeagueOverviewPage() {
       ? [selectedDivisionA, selectedDivisionB]
       : [selectedDivisionB, selectedDivisionA];
 
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from("division_cross_play")
       .insert({
         league_id: leagueId,
         division_a_id: divA,
         division_b_id: divB,
-      })
-      .select()
-      .single();
+      });
 
-    if (!error && data) {
-      setCrossPlayRules([...crossPlayRules, data as DivisionCrossPlay]);
+    if (!error) {
       setSelectedDivisionA("");
       setSelectedDivisionB("");
+      await refetch();
     }
     setAddingCrossPlay(false);
   }
@@ -263,7 +236,7 @@ export default function LeagueOverviewPage() {
       .delete()
       .eq("id", ruleId);
     if (!error) {
-      setCrossPlayRules(crossPlayRules.filter((r) => r.id !== ruleId));
+      await refetch();
     }
   }
 
@@ -278,13 +251,6 @@ export default function LeagueOverviewPage() {
     );
   }
 
-  function copyPublicLink() {
-    if (!league) return;
-    const url = `${window.location.origin}/league/${league.slug}`;
-    navigator.clipboard.writeText(url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
 
   async function inviteStaff() {
     if (!inviteEmail.trim()) return;
@@ -396,9 +362,8 @@ export default function LeagueOverviewPage() {
       .from("leagues")
       .update({ archived_at: null })
       .eq("id", leagueId);
-    setLeague({ ...league!, archived_at: null });
+    await refetch();
     setArchiving(false);
-    router.refresh();
   }
 
   if (!league) {
@@ -1054,9 +1019,7 @@ export default function LeagueOverviewPage() {
                   <code className="text-sm bg-muted px-2 py-1 rounded flex-1 truncate">
                     /league/{league.slug}
                   </code>
-                  <Button variant="outline" size="sm" onClick={copyPublicLink}>
-                    {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                  </Button>
+                  <PublicLinkCopy slug={league.slug} />
                   <Button
                     variant="outline"
                     size="sm"
