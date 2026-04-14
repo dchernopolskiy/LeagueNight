@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -60,6 +60,7 @@ interface Channel {
 
 export default function ChatPage() {
   const { leagueId } = useParams<{ leagueId: string }>();
+  const searchParams = useSearchParams();
   const [messages, setMessages] = useState<Message[]>([]);
   const [players, setPlayers] = useState<Player[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -202,12 +203,25 @@ export default function ChatPage() {
     return list;
   }, [teams, divisions, players, currentPlayerId, isOrganizer, myTeamIds, myDivisionIds]);
 
+  // Resolve initial channel from URL params (?channel=organizer, ?division=id, ?team=id)
+  // Only applies if user hasn't manually switched channels this session.
+  const urlChannelKey = useMemo(() => {
+    const ch = searchParams.get("channel");
+    const div = searchParams.get("division");
+    const team = searchParams.get("team");
+    if (ch) return ch;
+    if (div) return `division-${div}`;
+    if (team) return `team-${team}`;
+    return null;
+  }, [searchParams]);
+
   const activeChannel = useMemo(() => {
-    if (selectedChannelKey) {
-      return channels.find((c) => c.key === selectedChannelKey) ?? channels[0] ?? null;
+    const key = selectedChannelKey ?? urlChannelKey;
+    if (key) {
+      return channels.find((c) => c.key === key) ?? channels[0] ?? null;
     }
     return channels[0] ?? null;
-  }, [channels, selectedChannelKey]);
+  }, [channels, selectedChannelKey, urlChannelKey]);
 
   const isTeamCaptain = useMemo(() => {
     if (!activeChannel || activeChannel.type !== "team" || !currentPlayerId) return false;
@@ -382,29 +396,19 @@ export default function ChatPage() {
         is_announcement: true,
       };
 
-      const payloads: Record<string, unknown>[] = [];
-
-      // League channel
-      payloads.push({ ...messageBase, channel_type: "league", team_id: null, division_id: null });
-
-      // Organizer channel
-      payloads.push({ ...messageBase, channel_type: "organizer", team_id: null, division_id: null });
-
-      // All division channels
-      for (const div of divisions) {
-        payloads.push({ ...messageBase, channel_type: "division", team_id: null, division_id: div.id });
-      }
-
-      // All team channels
-      for (const team of teams) {
-        payloads.push({ ...messageBase, channel_type: "team", team_id: team.id, division_id: null });
-      }
+      // Announcements only go to League Chat and Organizer Chat.
+      // Players who check any channel will see it in League Chat.
+      // Division/team channels are left clean for focused discussion.
+      const payloads: Record<string, unknown>[] = [
+        { ...messageBase, channel_type: "league", team_id: null, division_id: null },
+        { ...messageBase, channel_type: "organizer", team_id: null, division_id: null },
+      ];
 
       const { error } = await supabase.from("messages").insert(payloads);
       if (error) {
         console.error("Failed to send announcement:", error);
       } else {
-        setAnnouncementStatus("Announcement sent to all channels");
+        setAnnouncementStatus("Announcement sent to League Chat & Organizer Chat");
         setTimeout(() => setAnnouncementStatus(null), 3000);
       }
     } else {

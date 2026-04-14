@@ -60,6 +60,7 @@ export async function POST(request: NextRequest) {
     leagueId,
     patternId,
     gamesPerTeam = 1,
+    gamesPerSession = 1,
     matchupFrequency = 1,
     mixDivisions = false,
     skipDates = [],
@@ -222,8 +223,21 @@ export async function POST(request: NextRequest) {
       durationMinutes: pattern.duration_minutes || 60,
       skipDates: mergedSkipDates,
     },
-    gamesPerTeam
+    gamesPerSession
   );
+
+  // Persist scheduling settings back to the pattern for self-contained regeneration
+  await supabase
+    .from("game_day_patterns")
+    .update({
+      games_per_team: gamesPerTeam,
+      games_per_session: gamesPerSession,
+      matchup_frequency: matchupFrequency,
+      mix_divisions: mixDivisions,
+      skip_dates: skipDates,
+      location_ids: effectiveLocationIds.length > 0 ? effectiveLocationIds : pattern.location_ids,
+    })
+    .eq("id", patternId);
 
   // Delete existing regular scheduled games (never touch playoff games)
   if (regenerateFrom) {

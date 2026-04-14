@@ -19,6 +19,9 @@ export async function POST(request: NextRequest) {
     seedBy,
     name,
     teamsPerBracket,
+    defaultLocationId,
+    defaultStartTime,
+    defaultDurationMinutes,
   } = body;
 
   if (!leagueId || !numTeams || !format || !seedBy || !name) {
@@ -134,6 +137,9 @@ export async function POST(request: NextRequest) {
         format,
         num_teams: bracketStandings.length,
         seed_by: seedBy,
+        default_location_id: defaultLocationId || null,
+        default_start_time: defaultStartTime || null,
+        default_duration_minutes: defaultDurationMinutes || null,
       })
       .select()
       .single();
@@ -145,6 +151,28 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Resolve default location name for games
+    let defaultLocationName: string | null = null;
+    if (defaultLocationId) {
+      const { data: loc } = await supabase
+        .from("locations")
+        .select("name")
+        .eq("id", defaultLocationId)
+        .single();
+      defaultLocationName = loc?.name || null;
+    }
+
+    // Build default scheduled_at: today's date + defaultStartTime if provided
+    function buildDefaultScheduledAt(): string {
+      if (defaultStartTime) {
+        const today = new Date();
+        const [h, m] = defaultStartTime.split(":").map(Number);
+        today.setHours(h, m, 0, 0);
+        return today.toISOString();
+      }
+      return new Date().toISOString();
+    }
+
     // Create playoff games for first round matchups
     const firstRoundSlots = slots.filter((s) => s.round === 1 && s.team_id);
     const gameInserts: {
@@ -154,6 +182,8 @@ export async function POST(request: NextRequest) {
       scheduled_at: string;
       status: string;
       is_playoff: boolean;
+      location_id?: string;
+      venue?: string;
     }[] = [];
 
     for (let i = 0; i < firstRoundSlots.length; i += 2) {
@@ -165,9 +195,10 @@ export async function POST(request: NextRequest) {
           league_id: leagueId,
           home_team_id: topSlot.team_id,
           away_team_id: bottomSlot.team_id,
-          scheduled_at: new Date().toISOString(),
+          scheduled_at: buildDefaultScheduledAt(),
           status: "scheduled",
           is_playoff: true,
+          ...(defaultLocationId && { location_id: defaultLocationId, venue: defaultLocationName }),
         });
       }
     }

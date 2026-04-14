@@ -17,7 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Copy, Check, ExternalLink, Plus, Trash2, Shield, UserPlus, ArrowRightLeft, Archive, ArchiveRestore } from "lucide-react";
+import { Copy, Check, ExternalLink, Plus, Trash2, Shield, UserPlus, ArrowRightLeft, Archive, ArchiveRestore, OctagonX } from "lucide-react";
 import type { League, LeagueSettings, Division, LeagueStaff } from "@/lib/types";
 
 export default function SettingsPage() {
@@ -49,6 +49,9 @@ export default function SettingsPage() {
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [archiving, setArchiving] = useState(false);
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteConfirmName, setDeleteConfirmName] = useState("");
 
   useEffect(() => {
     async function load() {
@@ -262,6 +265,20 @@ export default function SettingsPage() {
     setArchiving(false);
     setShowArchiveConfirm(false);
     router.push("/dashboard");
+  }
+
+  async function deleteLeague() {
+    setDeleting(true);
+    const res = await fetch(`/api/leagues/${leagueId}`, { method: "DELETE" });
+    setDeleting(false);
+    if (res.ok) {
+      router.push("/dashboard");
+    } else {
+      const err = await res.json().catch(() => ({}));
+      alert(err.error || "Failed to delete league.");
+      setShowDeleteConfirm(false);
+      setDeleteConfirmName("");
+    }
   }
 
   async function unarchiveLeague() {
@@ -581,6 +598,28 @@ export default function SettingsPage() {
               </Button>
             </div>
           )}
+
+          {isAdmin && (
+            <>
+              <Separator />
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">Delete this league</p>
+                  <p className="text-xs text-muted-foreground">
+                    Permanently remove all data — games, teams, standings, playoffs. This cannot be undone.
+                  </p>
+                </div>
+                <Button
+                  variant="destructive"
+                  onClick={() => { setShowDeleteConfirm(true); setDeleteConfirmName(""); }}
+                  disabled={deleting}
+                >
+                  <OctagonX className="h-4 w-4 mr-1" />
+                  Delete
+                </Button>
+              </div>
+            </>
+          )}
         </CardContent>
       </Card>
 
@@ -602,6 +641,51 @@ export default function SettingsPage() {
                 </Button>
                 <Button variant="destructive" onClick={archiveLeague} disabled={archiving}>
                   {archiving ? "Archiving..." : "Archive League"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <Card className="w-full max-w-md mx-4">
+            <CardHeader>
+              <CardTitle className="text-base text-destructive flex items-center gap-2">
+                <OctagonX className="h-5 w-5" />
+                Delete league permanently?
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                This will permanently delete <span className="font-semibold text-foreground">{league.name}</span> along
+                with all teams, players, games, standings, playoffs, and messages.{" "}
+                <span className="font-semibold text-destructive">This cannot be undone.</span>
+              </p>
+              <div className="space-y-2">
+                <Label className="text-xs">Type the league name to confirm</Label>
+                <Input
+                  value={deleteConfirmName}
+                  onChange={(e) => setDeleteConfirmName(e.target.value)}
+                  placeholder={league.name}
+                  autoFocus
+                />
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => { setShowDeleteConfirm(false); setDeleteConfirmName(""); }}
+                  disabled={deleting}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={deleteLeague}
+                  disabled={deleting || deleteConfirmName !== league.name}
+                >
+                  {deleting ? "Deleting..." : "Delete Forever"}
                 </Button>
               </div>
             </CardContent>

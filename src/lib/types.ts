@@ -64,6 +64,9 @@ export interface Bracket {
   format: "single_elimination" | "double_elimination";
   num_teams: number;
   seed_by: "record" | "points";
+  default_location_id: string | null;
+  default_start_time: string | null;
+  default_duration_minutes: number | null;
   created_at: string;
 }
 
@@ -109,15 +112,23 @@ export interface Player {
 export interface GameDayPattern {
   id: string;
   league_id: string;
-  day_of_week: number;
+  day_of_week: number;          // single day (legacy + used by scheduler)
+  days_of_week: number[] | null; // all days in this group (display grouping)
+  group_id: string | null;       // patterns created together share a group_id
   start_time: string;
+  end_time: string | null;
   venue: string | null;
   court_count: number;
   duration_minutes: number;
   starts_on: string;
   ends_on: string | null;
   location_ids: string[];
-  end_time: string | null;
+  // Scheduling settings stored so regeneration is self-contained
+  games_per_team: number;
+  games_per_session: number;
+  matchup_frequency: number;
+  mix_divisions: boolean;
+  skip_dates: string[];
 }
 
 export interface Game {

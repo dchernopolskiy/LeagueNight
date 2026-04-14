@@ -16,14 +16,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-  DialogClose,
-} from "@/components/ui/dialog";
-import {
   Calendar,
   Zap,
   X,
@@ -31,7 +23,6 @@ import {
   Pencil,
   Check,
   AlertTriangle,
-  Trash2,
   MapPin,
   CalendarX2,
   ArrowRight,
@@ -40,67 +31,8 @@ import { format } from "date-fns";
 import { generateSchedulePdf } from "@/lib/export/schedule-pdf";
 import type { Game, Team, GameDayPattern, League, Player, Location, LocationUnavailability } from "@/lib/types";
 import { useLeagueRole } from "@/lib/league-role-context";
+import { GameDaySetupPanel } from "@/components/dashboard/game-day-setup";
 
-const DAYS = [
-  "Sunday",
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  "Saturday",
-];
-
-const DURATION_OPTIONS = [30, 45, 60, 75, 90, 120];
-
-/**
- * Returns common US holiday dates that fall within a given date range.
- */
-function getUSHolidays(startDate: string, endDate: string): string[] {
-  const start = new Date(startDate + "T00:00:00");
-  const end = endDate ? new Date(endDate + "T00:00:00") : new Date(start.getFullYear() + 1, 0, 1);
-  const holidays: string[] = [];
-  const startYear = start.getFullYear();
-  const endYear = end.getFullYear();
-
-  for (let year = startYear; year <= endYear; year++) {
-    const candidates: Date[] = [];
-    candidates.push(new Date(year, 0, 1));
-    candidates.push(nthWeekday(year, 0, 1, 3));
-    candidates.push(nthWeekday(year, 1, 1, 3));
-    candidates.push(lastWeekday(year, 4, 1));
-    candidates.push(new Date(year, 6, 4));
-    candidates.push(nthWeekday(year, 8, 1, 1));
-    candidates.push(nthWeekday(year, 10, 4, 4));
-    candidates.push(new Date(year, 11, 25));
-
-    for (const d of candidates) {
-      if (d >= start && d <= end) {
-        holidays.push(formatYMD(d));
-      }
-    }
-  }
-  return holidays;
-}
-
-function nthWeekday(year: number, month: number, weekday: number, n: number): Date {
-  const first = new Date(year, month, 1);
-  const diff = (weekday - first.getDay() + 7) % 7;
-  return new Date(year, month, 1 + diff + (n - 1) * 7);
-}
-
-function lastWeekday(year: number, month: number, weekday: number): Date {
-  const last = new Date(year, month + 1, 0);
-  const diff = (last.getDay() - weekday + 7) % 7;
-  return new Date(year, month, last.getDate() - diff);
-}
-
-function formatYMD(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
 
 export default function SchedulePage() {
   const { leagueId } = useParams<{ leagueId: string }>();
@@ -118,43 +50,7 @@ export default function SchedulePage() {
   const [generating, setGenerating] = useState(false);
   const router = useRouter();
 
-  // Pattern form
-  const [dayOfWeek, setDayOfWeek] = useState("4");
-  const [startTime, setStartTime] = useState("19:00");
-  const [endTime, setEndTime] = useState("");
-  const [venue, setVenue] = useState("");
-  const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([]);
-  const [durationMinutes, setDurationMinutes] = useState("60");
-  const [startsOn, setStartsOn] = useState("");
-  const [endsOn, setEndsOn] = useState("");
-  const [gamesPerTeam, setGamesPerTeam] = useState("1");
-  const [matchupFrequency, setMatchupFrequency] = useState("1");
-  const [mixDivisions, setMixDivisions] = useState(false);
-  const [addingPattern, setAddingPattern] = useState(false);
-
-  // Skip dates
-  const [skipDates, setSkipDates] = useState<string[]>([]);
-  const [newSkipDate, setNewSkipDate] = useState("");
-
-  // Regenerate from date
-  const [regenerateFrom, setRegenerateFrom] = useState("");
-
-  // Confirm regeneration
-  const [confirmGenerate, setConfirmGenerate] = useState<string | null>(null);
-
-  // Confirm delete pattern
-  const [confirmDeletePattern, setConfirmDeletePattern] = useState<string | null>(null);
-
-  // Edit pattern dialog
-  const [editingPattern, setEditingPattern] = useState<GameDayPattern | null>(null);
-  const [editDayOfWeek, setEditDayOfWeek] = useState("4");
-  const [editStartTime, setEditStartTime] = useState("19:00");
-  const [editEndTime, setEditEndTime] = useState("");
-  const [editVenue, setEditVenue] = useState("");
-  const [editSelectedLocationIds, setEditSelectedLocationIds] = useState<string[]>([]);
-  const [editDurationMinutes, setEditDurationMinutes] = useState("60");
-  const [editStartsOn, setEditStartsOn] = useState("");
-  const [editEndsOn, setEditEndsOn] = useState("");
+  // (Pattern form state lives in GameDaySetupPanel)
 
   // Inline game editing
   const [editingGameId, setEditingGameId] = useState<string | null>(null);
@@ -169,19 +65,6 @@ export default function SchedulePage() {
   const [conflictRescheduleDates, setConflictRescheduleDates] = useState<Record<string, string>>({});
   const [applyingAll, setApplyingAll] = useState(false);
 
-  const computedCourtCount = useMemo(() => {
-    return selectedLocationIds.reduce((sum, id) => {
-      const loc = locations.find((l) => l.id === id);
-      return sum + (loc?.court_count || 0);
-    }, 0);
-  }, [selectedLocationIds, locations]);
-
-  const editComputedCourtCount = useMemo(() => {
-    return editSelectedLocationIds.reduce((sum, id) => {
-      const loc = locations.find((l) => l.id === id);
-      return sum + (loc?.court_count || 0);
-    }, 0);
-  }, [editSelectedLocationIds, locations]);
 
   useEffect(() => {
     loadData();
@@ -222,163 +105,32 @@ export default function SchedulePage() {
     setLoading(false);
   }
 
-  function toggleLocationId(locId: string) {
-    setSelectedLocationIds((prev) =>
-      prev.includes(locId) ? prev.filter((id) => id !== locId) : [...prev, locId]
-    );
-  }
-
-  function toggleEditLocationId(locId: string) {
-    setEditSelectedLocationIds((prev) =>
-      prev.includes(locId) ? prev.filter((id) => id !== locId) : [...prev, locId]
-    );
-  }
-
-  async function addPattern() {
-    if (!startsOn) return;
-    setAddingPattern(true);
-    const supabase = createClient();
-    const courtCount = computedCourtCount || 1;
-    const { data, error } = await supabase
-      .from("game_day_patterns")
-      .insert({
-        league_id: leagueId,
-        day_of_week: parseInt(dayOfWeek),
-        start_time: startTime,
-        venue: venue || null,
-        court_count: courtCount,
-        starts_on: startsOn,
-        ends_on: endsOn || null,
-        duration_minutes: parseInt(durationMinutes),
-        location_ids: selectedLocationIds,
-        end_time: endTime || null,
-      })
-      .select()
-      .single();
-
-    if (!error && data) {
-      setPatterns([...patterns, data as GameDayPattern]);
+  async function generateSchedule(
+    patternId: string,
+    opts: {
+      gamesPerTeam: number;
+      gamesPerSession: number;
+      matchupFrequency: number;
+      mixDivisions: boolean;
+      skipDates: string[];
+      regenerateFrom?: string;
+      locationIds: string[];
     }
-    setAddingPattern(false);
-  }
-
-  async function deletePattern(patternId: string) {
-    const supabase = createClient();
-    const { error } = await supabase.from("game_day_patterns").delete().eq("id", patternId);
-    if (!error) {
-      setPatterns(patterns.filter((p) => p.id !== patternId));
-    }
-    setConfirmDeletePattern(null);
-  }
-
-  function openEditPattern(p: GameDayPattern) {
-    setEditingPattern(p);
-    setEditDayOfWeek(p.day_of_week.toString());
-    setEditStartTime(p.start_time.slice(0, 5));
-    setEditVenue(p.venue || "");
-    setEditDurationMinutes((p.duration_minutes || 60).toString());
-    // Prefer location_ids array; fall back to singular location_id for old rows
-    setEditSelectedLocationIds(p.location_ids || []);
-    setEditEndTime(p.end_time ? p.end_time.slice(0, 5) : "");
-    setEditStartsOn(p.starts_on);
-    setEditEndsOn(p.ends_on || "");
-  }
-
-  async function saveEditPattern() {
-    if (!editingPattern) return;
-    const supabase = createClient();
-    const courtCount = editComputedCourtCount || 1;
-    const { error } = await supabase
-      .from("game_day_patterns")
-      .update({
-        day_of_week: parseInt(editDayOfWeek),
-        start_time: editStartTime,
-        venue: editVenue || null,
-        court_count: courtCount,
-        duration_minutes: parseInt(editDurationMinutes),
-        location_ids: editSelectedLocationIds,
-        end_time: editEndTime || null,
-        starts_on: editStartsOn,
-        ends_on: editEndsOn || null,
-      })
-      .eq("id", editingPattern.id);
-
-    if (!error) {
-      setPatterns(
-        patterns.map((p) =>
-          p.id === editingPattern.id
-            ? {
-                ...p,
-                day_of_week: parseInt(editDayOfWeek),
-                start_time: editStartTime,
-                venue: editVenue || null,
-                court_count: courtCount,
-                duration_minutes: parseInt(editDurationMinutes),
-                location_ids: editSelectedLocationIds,
-                end_time: editEndTime || null,
-                starts_on: editStartsOn,
-                ends_on: editEndsOn || null,
-              }
-            : p
-        )
-      );
-      setEditingPattern(null);
-    }
-  }
-
-  function addSkipDate() {
-    if (newSkipDate && !skipDates.includes(newSkipDate)) {
-      setSkipDates([...skipDates, newSkipDate].sort());
-      setNewSkipDate("");
-    }
-  }
-
-  function removeSkipDate(date: string) {
-    setSkipDates(skipDates.filter((d) => d !== date));
-  }
-
-  function addCommonHolidays() {
-    const allStartsOn = patterns.map((p) => p.starts_on).filter((x): x is string => !!x);
-    const allEndsOn = patterns.map((p) => p.ends_on).filter((x): x is string => !!x);
-    const rangeStart = allStartsOn.length > 0 ? allStartsOn.sort()[0] : startsOn || formatYMD(new Date());
-    const rangeEnd: string =
-      allEndsOn.length > 0 ? allEndsOn.sort().reverse()[0] : `${new Date().getFullYear() + 1}-12-31`;
-    const holidays = getUSHolidays(rangeStart, rangeEnd);
-    const merged = Array.from(new Set([...skipDates, ...holidays])).sort();
-    setSkipDates(merged);
-  }
-
-  function handleGenerateClick(patternId: string) {
-    const hasScheduledGames = games.some((g) => g.status === "scheduled");
-    if (hasScheduledGames) {
-      setConfirmGenerate(patternId);
-    } else {
-      generateSchedule(patternId);
-    }
-  }
-
-  function getLocationIdsForPattern(p: GameDayPattern): string[] {
-    return p.location_ids || [];
-  }
-
-  async function generateSchedule(patternId: string) {
+  ) {
     setGenerating(true);
-    setConfirmGenerate(null);
-    const pattern = patterns.find((p) => p.id === patternId);
-    const locationIds = pattern ? getLocationIdsForPattern(pattern) : [];
-
     const res = await fetch("/api/schedule/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         leagueId,
         patternId,
-        gamesPerTeam: parseInt(gamesPerTeam),
-        matchupFrequency: parseInt(matchupFrequency),
-        mixDivisions,
-        skipDates,
-        regenerateFrom: regenerateFrom || undefined,
-        locationIds,
+        gamesPerTeam: opts.gamesPerTeam,
+        gamesPerSession: opts.gamesPerSession,
+        matchupFrequency: opts.matchupFrequency,
+        mixDivisions: opts.mixDivisions,
+        skipDates: opts.skipDates,
+        regenerateFrom: opts.regenerateFrom,
+        locationIds: opts.locationIds,
       }),
     });
 
@@ -567,60 +319,6 @@ export default function SchedulePage() {
     return <p className="text-muted-foreground">Loading schedule...</p>;
   }
 
-  function renderLocationCheckboxes(selected: string[], toggle: (id: string) => void) {
-    if (locations.length === 0) return null;
-    return (
-      <div className="space-y-2">
-        <Label>Locations</Label>
-        <div className="border rounded-lg p-3 space-y-2 max-h-48 overflow-y-auto">
-          {locations.map((loc) => (
-            <label key={loc.id} className="flex items-center gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={selected.includes(loc.id)}
-                onChange={() => toggle(loc.id)}
-                className="h-4 w-4 rounded border-input"
-              />
-              <span className="text-sm flex-1">{loc.name}</span>
-              <span className="text-xs text-muted-foreground">
-                {loc.court_count} {loc.court_count === 1 ? "court" : "courts"}
-              </span>
-            </label>
-          ))}
-        </div>
-        {selected.length > 0 && (
-          <p className="text-xs text-muted-foreground">
-            Total courts:{" "}
-            {selected.reduce((sum, id) => {
-              const loc = locations.find((l) => l.id === id);
-              return sum + (loc?.court_count || 0);
-            }, 0)}
-          </p>
-        )}
-      </div>
-    );
-  }
-
-  function renderDurationSelect(value: string, onChange: (v: string) => void) {
-    return (
-      <div className="space-y-2">
-        <Label>Game duration</Label>
-        <Select value={value} onValueChange={(v) => v && onChange(v)}>
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {DURATION_OPTIONS.map((mins) => (
-              <SelectItem key={mins} value={mins.toString()}>
-                {mins} min
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6">
       <Card>
@@ -630,350 +328,22 @@ export default function SchedulePage() {
             Game Day Setup
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 border rounded-lg p-3 bg-muted/30">
-            <div className="space-y-1">
-              <Label className="text-xs">Games per team per day</Label>
-              <Select value={gamesPerTeam} onValueChange={(v) => v && setGamesPerTeam(v)}>
-                <SelectTrigger className="h-8">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {[1, 2, 3, 4].map((n) => (
-                    <SelectItem key={n} value={n.toString()}>
-                      {n} {n === 1 ? "game" : "games"}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Play each team X times</Label>
-              <Input
-                type="number"
-                min={1}
-                max={10}
-                value={matchupFrequency}
-                onChange={(e) => setMatchupFrequency(e.target.value)}
-                className="h-8"
-              />
-              <p className="text-[10px] text-muted-foreground leading-tight">
-                If teams exceed available slots, some matchups may repeat.
-              </p>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Mix divisions</Label>
-              <label className="flex items-center gap-2 h-8 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={mixDivisions}
-                  onChange={(e) => setMixDivisions(e.target.checked)}
-                  className="h-4 w-4 rounded border-input"
-                />
-                <span className="text-xs text-muted-foreground">Cross-division play</span>
-              </label>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Regenerate from</Label>
-              <Input
-                type="date"
-                value={regenerateFrom}
-                onChange={(e) => setRegenerateFrom(e.target.value)}
-                className="h-8"
-              />
-            </div>
-          </div>
-
-          <div className="border rounded-lg p-3 space-y-3">
-            <Label className="text-xs font-medium">Skip Dates (holidays / off weeks)</Label>
-            <div className="flex items-center gap-2">
-              <Input
-                type="date"
-                value={newSkipDate}
-                onChange={(e) => setNewSkipDate(e.target.value)}
-                className="h-8 w-48"
-              />
-              {canManage && (
-                <Button variant="outline" size="sm" onClick={addSkipDate} disabled={!newSkipDate}>
-                  Add
-                </Button>
-              )}
-              {canManage && (
-                <Button variant="outline" size="sm" onClick={addCommonHolidays}>
-                  Add common holidays
-                </Button>
-              )}
-            </div>
-            {skipDates.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {skipDates.map((date) => (
-                  <Badge key={date} variant="secondary" className="gap-1">
-                    {date}
-                    <button onClick={() => removeSkipDate(date)} className="ml-0.5 hover:text-destructive">
-                      <X className="h-3 w-3" />
-                    </button>
-                  </Badge>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {patterns.map((p) => {
-            const patternLocIds = p.location_ids || [];
-            const patternLocNames = patternLocIds
-              .map((id) => locationsMap.get(id)?.name)
-              .filter(Boolean) as string[];
-            const venueName = patternLocNames.length > 0
-              ? patternLocNames.join(", ")
-              : p.venue || "No venue set";
-            const upcomingUnavail = patternLocIds.length > 0
-              ? locationUnavail.filter(
-                  (u) =>
-                    patternLocIds.includes(u.location_id) &&
-                    u.unavailable_date >= p.starts_on &&
-                    (!p.ends_on || u.unavailable_date <= p.ends_on)
-                )
-              : [];
-
-            return (
-              <div key={p.id} className="flex items-center justify-between border rounded-lg p-3">
-                <div>
-                  <p className="font-medium">
-                    {DAYS[p.day_of_week]}s at {p.start_time.slice(0, 5)}{p.end_time ? `–${p.end_time.slice(0, 5)}` : ""}
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    {venueName} &middot;{" "}
-                    {p.court_count > 1 ? `${p.court_count} courts` : "1 court"} &middot;{" "}
-                    {p.duration_minutes || 60} min games
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    Starting {p.starts_on}
-                    {p.ends_on && ` through ${p.ends_on}`}
-                  </p>
-                  {upcomingUnavail.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {upcomingUnavail.map((u) => (
-                        <Badge
-                          key={u.id}
-                          variant="secondary"
-                          className="text-xs text-amber-600 bg-amber-50 border-amber-200"
-                        >
-                          <AlertTriangle className="h-3 w-3 mr-0.5" />
-                          Location unavailable: {u.unavailable_date}
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                {canManage && (
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 w-8 p-0 text-muted-foreground"
-                      onClick={() => openEditPattern(p)}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
-                      onClick={() => setConfirmDeletePattern(p.id)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      onClick={() => handleGenerateClick(p.id)}
-                      disabled={generating || teams.length < 2}
-                      size="sm"
-                    >
-                      <Zap className="h-4 w-4 mr-1" />
-                      {generating ? "Generating..." : "Generate"}
-                    </Button>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-
-          {canManage && (
-            <Dialog>
-              <DialogTrigger>
-                <Button variant="outline" size="sm">
-                  Add Game Day
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Set Up Game Day</DialogTitle>
-                </DialogHeader>
-                <div className="space-y-4 pt-2">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>Day of week</Label>
-                      <Select value={dayOfWeek} onValueChange={(v) => v && setDayOfWeek(v)}>
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {DAYS.map((day, i) => (
-                            <SelectItem key={i} value={i.toString()}>
-                              {day}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Start time</Label>
-                      <Input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>End time <span className="text-muted-foreground font-normal">(optional)</span></Label>
-                      <Input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
-                      <p className="text-xs text-muted-foreground">No games start after this time</p>
-                    </div>
-                  </div>
-                  {renderLocationCheckboxes(selectedLocationIds, toggleLocationId)}
-                  <div className="space-y-2">
-                    <Label>Venue override</Label>
-                    <Input
-                      value={venue}
-                      onChange={(e) => setVenue(e.target.value)}
-                      placeholder={selectedLocationIds.length > 0 ? "Override location name" : "South Sound YMCA"}
-                    />
-                  </div>
-                  {renderDurationSelect(durationMinutes, setDurationMinutes)}
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>First game date</Label>
-                      <Input type="date" value={startsOn} onChange={(e) => setStartsOn(e.target.value)} />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Last game date (optional)</Label>
-                      <Input type="date" value={endsOn} onChange={(e) => setEndsOn(e.target.value)} />
-                    </div>
-                  </div>
-                  <Button onClick={addPattern} disabled={addingPattern || !startsOn} className="w-full">
-                    {addingPattern ? "Saving..." : "Save Game Day"}
-                  </Button>
-                </div>
-              </DialogContent>
-            </Dialog>
-          )}
+        <CardContent>
+          <GameDaySetupPanel
+            leagueId={leagueId}
+            organizerId={league?.organizer_id || ""}
+            patterns={patterns}
+            locations={locations}
+            locationUnavail={locationUnavail}
+            teamCount={teams.length}
+            canManage={canManage}
+            generating={generating}
+            onPatternsChange={setPatterns}
+            onLocationsChange={setLocations}
+            onGenerate={generateSchedule}
+          />
         </CardContent>
       </Card>
-
-      <Dialog open={!!confirmGenerate} onOpenChange={(open) => !open && setConfirmGenerate(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-amber-500" />
-              Regenerate Schedule?
-            </DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            {regenerateFrom
-              ? `This will replace all scheduled (unplayed) games from ${regenerateFrom} onward. Completed game results will be kept. This cannot be undone.`
-              : "This will replace all currently scheduled (unplayed) games. Completed game results will be kept. This cannot be undone."}
-          </p>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setConfirmGenerate(null)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => confirmGenerate && generateSchedule(confirmGenerate)}>
-              Replace Schedule
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={!!confirmDeletePattern} onOpenChange={(open) => !open && setConfirmDeletePattern(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-amber-500" />
-              Delete Game Day Pattern?
-            </DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            This will remove this game day pattern. Previously generated games will not be affected. This cannot be
-            undone.
-          </p>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setConfirmDeletePattern(null)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => confirmDeletePattern && deletePattern(confirmDeletePattern)}>
-              Delete
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={!!editingPattern} onOpenChange={(open) => !open && setEditingPattern(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit Game Day</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 pt-2">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Day of week</Label>
-                <Select value={editDayOfWeek} onValueChange={(v) => v && setEditDayOfWeek(v)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {DAYS.map((day, i) => (
-                      <SelectItem key={i} value={i.toString()}>
-                        {day}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Start time</Label>
-                <Input type="time" value={editStartTime} onChange={(e) => setEditStartTime(e.target.value)} />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>End time <span className="text-muted-foreground font-normal">(optional)</span></Label>
-                <Input type="time" value={editEndTime} onChange={(e) => setEditEndTime(e.target.value)} />
-                <p className="text-xs text-muted-foreground">No games start after this time</p>
-              </div>
-            </div>
-            {renderLocationCheckboxes(editSelectedLocationIds, toggleEditLocationId)}
-            <div className="space-y-2">
-              <Label>Venue override</Label>
-              <Input
-                value={editVenue}
-                onChange={(e) => setEditVenue(e.target.value)}
-                placeholder="South Sound YMCA"
-              />
-            </div>
-            {renderDurationSelect(editDurationMinutes, setEditDurationMinutes)}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>First game date</Label>
-                <Input type="date" value={editStartsOn} onChange={(e) => setEditStartsOn(e.target.value)} />
-              </div>
-              <div className="space-y-2">
-                <Label>Last game date (optional)</Label>
-                <Input type="date" value={editEndsOn} onChange={(e) => setEditEndsOn(e.target.value)} />
-              </div>
-            </div>
-            <Button onClick={saveEditPattern} disabled={!editStartsOn} className="w-full">
-              Save Changes
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       {games.length > 0 && (
         <Card>
