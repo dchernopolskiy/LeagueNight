@@ -592,7 +592,7 @@ export default function PlayoffsPage() {
                       <Label className="text-xs">Game duration (min)</Label>
                       <Select
                         value={defaultDurationMinutes || "none"}
-                        onValueChange={(v) => setDefaultDurationMinutes(v === "none" ? "" : v)}
+                        onValueChange={(v) => v && setDefaultDurationMinutes(v === "none" ? "" : v)}
                       >
                         <SelectTrigger className="h-8 text-xs">
                           <SelectValue placeholder="—" />
