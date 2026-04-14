@@ -37,7 +37,6 @@ const tabs: TabDef[] = [
   { suffix: "/subs", label: "Subs", icon: UserPlus },
   { suffix: "/chat", label: "Chat", icon: MessageSquare },
   { suffix: "/payments", label: "Payments", icon: CreditCard, roles: ["organizer", "staff"] },
-  { suffix: "/settings", label: "Settings", icon: Settings, roles: ["organizer", "staff"] },
 ];
 
 const LEVEL_COLORS: Record<number, string> = {

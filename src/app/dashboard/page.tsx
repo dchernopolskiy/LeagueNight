@@ -233,8 +233,9 @@ export default async function DashboardPage() {
                                 Playoffs
                               </Link>
                               <Link
-                                href={`/dashboard/leagues/${league.id}/settings`}
+                                href={`/dashboard/leagues/${league.id}`}
                                 className="ml-auto p-1 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                                title="View league overview"
                               >
                                 <Settings className="h-3.5 w-3.5" />
                               </Link>
@@ -297,7 +298,7 @@ export default async function DashboardPage() {
                     {league.season_name || "No season set"}
                   </p>
                   <Link
-                    href={`/dashboard/leagues/${league.id}/settings`}
+                    href={`/dashboard/leagues/${league.id}`}
                     className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
                   >
                     <Settings className="h-3 w-3" />
