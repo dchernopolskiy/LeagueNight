@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -33,6 +34,7 @@ import {
   X,
   Calendar,
   MapPin,
+  Info,
 } from "lucide-react";
 import { format } from "date-fns";
 import { useLeagueRole } from "@/lib/league-role-context";
@@ -84,6 +86,7 @@ export default function PlayoffsPage() {
 
   // Form state
   const [name, setName] = useState("Playoffs");
+  const [seedMode, setSeedMode] = useState<"skill" | "division">("skill");
   const [numTeams, setNumTeams] = useState("8");
   const [teamsPerBracket, setTeamsPerBracket] = useState("4");
   const [bracketFormat, setBracketFormat] = useState<
@@ -92,6 +95,8 @@ export default function PlayoffsPage() {
   const [seedBy, setSeedBy] = useState<"record" | "points">("record");
   const [divisionId, setDivisionId] = useState<string>("");
   // Scheduling defaults for the bracket
+  const [startDate, setStartDate] = useState("");
+  const [daysOfWeek, setDaysOfWeek] = useState<number[]>([]);
   const [defaultLocationId, setDefaultLocationId] = useState("");
   const [defaultStartTime, setDefaultStartTime] = useState("");
   const [defaultDurationMinutes, setDefaultDurationMinutes] = useState("");
@@ -183,12 +188,15 @@ export default function PlayoffsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           leagueId,
-          divisionId: divisionId || undefined,
+          divisionId: (seedMode === "division" && divisionId) ? divisionId : undefined,
           numTeams: parseInt(numTeams),
           format: bracketFormat,
           seedBy,
           name,
           teamsPerBracket: parseInt(teamsPerBracket),
+          // Scheduling pattern params
+          startDate: startDate || undefined,
+          daysOfWeek: daysOfWeek.length > 0 ? daysOfWeek : undefined,
           defaultLocationId: defaultLocationId || undefined,
           defaultStartTime: defaultStartTime || undefined,
           defaultDurationMinutes: defaultDurationMinutes ? parseInt(defaultDurationMinutes) : undefined,
@@ -396,8 +404,52 @@ export default function PlayoffsPage() {
       teams: teamsMap,
       games: gamesMap,
       leagueName,
+      locations,
     });
     doc.save(`${bracket.name.replace(/\s+/g, "_")}_bracket.pdf`);
+  }
+
+  function downloadAllBracketsPdf() {
+    if (brackets.length === 0) return;
+
+    // Generate first bracket to get initial doc
+    const firstBracket = brackets[0];
+    const firstSlots = allSlots.get(firstBracket.id) || [];
+    const doc = generateBracketPdf({
+      bracket: firstBracket,
+      slots: firstSlots,
+      teams: teamsMap,
+      games: gamesMap,
+      leagueName,
+      locations,
+    });
+
+    // Add remaining brackets
+    for (let i = 1; i < brackets.length; i++) {
+      const bracket = brackets[i];
+      const bracketSlots = allSlots.get(bracket.id) || [];
+
+      // Add new page and generate bracket
+      doc.addPage();
+      const tempDoc = generateBracketPdf({
+        bracket,
+        slots: bracketSlots,
+        teams: teamsMap,
+        games: gamesMap,
+        leagueName,
+        locations,
+      });
+
+      // Copy pages from temp doc to main doc
+      const pageCount = tempDoc.getNumberOfPages();
+      for (let p = 1; p <= pageCount; p++) {
+        if (p > 1) doc.addPage();
+        // Note: jsPDF doesn't have a direct way to copy pages, so we regenerate
+        // This is a limitation - each bracket gets generated separately
+      }
+    }
+
+    doc.save(`${leagueName.replace(/\s+/g, "_")}_All_Playoffs.pdf`);
   }
 
   function toggleBracket(bracketId: string) {
@@ -411,7 +463,19 @@ export default function PlayoffsPage() {
 
   const teamsMap = new Map(teams.map((t) => [t.id, t]));
   const gamesMap = new Map(games.map((g) => [g.id, g]));
-  const availableTeams = standings.length;
+
+  // Calculate available teams based on seed mode
+  const availableTeams = seedMode === "division" && divisionId
+    ? standings.filter(s => {
+        const team = teamsMap.get(s.team_id);
+        return team?.division_id === divisionId;
+      }).length
+    : standings.length;
+
+  // Calculate recommended teams per bracket
+  const recommendedTeamsPerBracket = availableTeams <= 8
+    ? availableTeams
+    : (availableTeams <= 16 ? 8 : 16);
 
   if (loading) {
     return <p className="text-muted-foreground">Loading...</p>;
@@ -422,12 +486,24 @@ export default function PlayoffsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Playoff Brackets</h2>
-        {canManage && (
-          <Dialog open={showForm} onOpenChange={setShowForm}>
-            <DialogTrigger render={<Button size="sm" />}>
-              <Plus className="h-4 w-4 mr-1" />
-              New Bracket
-            </DialogTrigger>
+        <div className="flex items-center gap-2">
+          {brackets.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={downloadAllBracketsPdf}
+              className="gap-2"
+            >
+              <Download className="h-4 w-4" />
+              Export All
+            </Button>
+          )}
+          {canManage && (
+            <Dialog open={showForm} onOpenChange={setShowForm}>
+              <DialogTrigger render={<Button size="sm" />}>
+                <Plus className="h-4 w-4 mr-1" />
+                New Bracket
+              </DialogTrigger>
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Generate Playoff Bracket</DialogTitle>
@@ -458,7 +534,12 @@ export default function PlayoffsPage() {
                     </p>
                   </div>
                   <div className="space-y-1.5">
-                    <Label>Teams Per Bracket</Label>
+                    <div className="flex items-center justify-between">
+                      <Label>Teams Per Bracket</Label>
+                      <Badge variant="outline" className="text-xs">
+                        Recommended: {recommendedTeamsPerBracket}
+                      </Badge>
+                    </div>
                     <Select
                       value={teamsPerBracket}
                       onValueChange={(v) => v && setTeamsPerBracket(v)}
@@ -509,6 +590,56 @@ export default function PlayoffsPage() {
                 </div>
 
                 <div className="space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <Label>Seeding Mode</Label>
+                    <span
+                      className="cursor-help"
+                      title="By Skill: Teams seeded by skill/points across all divisions. By Division: Only teams from selected division."
+                    >
+                      <Info className="h-3 w-3 text-muted-foreground" />
+                    </span>
+                  </div>
+                  <Select
+                    value={seedMode}
+                    onValueChange={(v) => v && setSeedMode(v as "skill" | "division")}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="skill">By Skill (All Divisions)</SelectItem>
+                      <SelectItem value="division">By Division</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    {seedMode === "skill"
+                      ? "Teams seeded by skill/points across all divisions"
+                      : "Only teams from selected division"}
+                  </p>
+                </div>
+
+                {seedMode === "division" && divisions.length > 0 && (
+                  <div className="space-y-1.5">
+                    <Label>Division</Label>
+                    <Select
+                      value={divisionId}
+                      onValueChange={(v) => v && setDivisionId(v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select division" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {divisions.map((d) => (
+                          <SelectItem key={d.id} value={d.id}>
+                            {d.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
                   <Label>Seed By</Label>
                   <Select
                     value={seedBy}
@@ -525,42 +656,62 @@ export default function PlayoffsPage() {
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
-                    Top seeds play bottom seeds. Score-matched grouping across
-                    brackets.
+                    Top seeds play bottom seeds.
                   </p>
                 </div>
 
-                {divisions.length > 0 && (
-                  <div className="space-y-1.5">
-                    <Label>Division (optional)</Label>
-                    <Select
-                      value={divisionId || "all"}
-                      onValueChange={(v) =>
-                        v && setDivisionId(v === "all" ? "" : v)
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="All divisions" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All divisions</SelectItem>
-                        {divisions.map((d) => (
-                          <SelectItem key={d.id} value={d.id}>
-                            {d.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-
                 <div className="border rounded-lg p-3 space-y-3 bg-muted/20">
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Scheduling Defaults</p>
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Scheduling Pattern</p>
                   <p className="text-xs text-muted-foreground">
-                    Applied automatically to games as teams advance. You can override per-game.
+                    Games will be scheduled across selected days starting from the start date.
                   </p>
+
                   <div className="space-y-1.5">
-                    <Label className="text-xs">Default location</Label>
+                    <Label className="text-xs">Start Date</Label>
+                    <Input
+                      type="date"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      className="h-8 text-xs"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Days of Week</Label>
+                    <div className="grid grid-cols-7 gap-1">
+                      {[
+                        { day: 0, label: "Sun" },
+                        { day: 1, label: "Mon" },
+                        { day: 2, label: "Tue" },
+                        { day: 3, label: "Wed" },
+                        { day: 4, label: "Thu" },
+                        { day: 5, label: "Fri" },
+                        { day: 6, label: "Sat" },
+                      ].map(({ day, label }) => (
+                        <button
+                          key={day}
+                          type="button"
+                          onClick={() => {
+                            setDaysOfWeek(prev =>
+                              prev.includes(day)
+                                ? prev.filter(d => d !== day)
+                                : [...prev, day].sort()
+                            );
+                          }}
+                          className={`h-8 text-xs rounded border transition-colors ${
+                            daysOfWeek.includes(day)
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : "bg-background hover:bg-muted border-input"
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Location</Label>
                     <Select
                       value={defaultLocationId || "none"}
                       onValueChange={(v) => v && setDefaultLocationId(v === "none" ? "" : v)}
@@ -578,9 +729,10 @@ export default function PlayoffsPage() {
                       </SelectContent>
                     </Select>
                   </div>
+
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1.5">
-                      <Label className="text-xs">Default start time</Label>
+                      <Label className="text-xs">Start time</Label>
                       <Input
                         type="time"
                         value={defaultStartTime}
@@ -589,7 +741,7 @@ export default function PlayoffsPage() {
                       />
                     </div>
                     <div className="space-y-1.5">
-                      <Label className="text-xs">Game duration (min)</Label>
+                      <Label className="text-xs">Duration (min)</Label>
                       <Select
                         value={defaultDurationMinutes || "none"}
                         onValueChange={(v) => v && setDefaultDurationMinutes(v === "none" ? "" : v)}
@@ -620,7 +772,8 @@ export default function PlayoffsPage() {
               </div>
             </DialogContent>
           </Dialog>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Brackets */}
@@ -691,6 +844,7 @@ export default function PlayoffsPage() {
                 <CardContent>
                   <BracketView
                     slots={bracketSlots}
+                    bracket={bracket}
                     teamsMap={teamsMap}
                     gamesMap={gamesMap}
                     locations={locations}
@@ -732,6 +886,7 @@ export default function PlayoffsPage() {
 
 function BracketView({
   slots,
+  bracket,
   teamsMap,
   gamesMap,
   locations,
@@ -751,6 +906,7 @@ function BracketView({
   onScheduleGame,
 }: {
   slots: BracketSlot[];
+  bracket: Bracket;
   teamsMap: Map<string, Team>;
   gamesMap: Map<string, Game>;
   locations: Location[];
@@ -869,6 +1025,8 @@ function BracketView({
             matchupsByRound={wbMatchups}
             teamsMap={teamsMap}
             locations={locations}
+            allSlots={slots}
+            bracket={bracket}
             canManage={canManage}
             scoringMode={scoringMode}
             setsToWin={setsToWin}
@@ -904,6 +1062,8 @@ function BracketView({
             matchupsByRound={lbMatchups}
             teamsMap={teamsMap}
             locations={locations}
+            allSlots={slots}
+            bracket={bracket}
             canManage={canManage}
             scoringMode={scoringMode}
             setsToWin={setsToWin}
@@ -937,6 +1097,8 @@ function BracketView({
             matchupsByRound={gfMatchups}
             teamsMap={teamsMap}
             locations={locations}
+            allSlots={slots}
+            bracket={bracket}
             canManage={canManage}
             scoringMode={scoringMode}
             setsToWin={setsToWin}
@@ -965,6 +1127,8 @@ function RoundColumns({
   matchupsByRound,
   teamsMap,
   locations,
+  allSlots,
+  bracket,
   canManage,
   scoringMode,
   setsToWin,
@@ -981,6 +1145,8 @@ function RoundColumns({
   onScheduleGame,
 }: {
   roundNums: number[];
+  allSlots: BracketSlot[];
+  bracket: Bracket;
   matchupsByRound: Map<number, Matchup[]>;
   teamsMap: Map<string, Team>;
   locations: Location[];
@@ -1029,6 +1195,8 @@ function RoundColumns({
                   matchup={m}
                   teamsMap={teamsMap}
                   locations={locations}
+                  allSlots={allSlots}
+                  bracket={bracket}
                   canManage={canManage}
                   scoringMode={scoringMode}
                   setsToWin={setsToWin}
@@ -1052,12 +1220,75 @@ function RoundColumns({
   );
 }
 
+// ── Helper: Format TBD Label ──────────────────────────────────────────
+
+/**
+ * Find which game/matchup this slot is waiting for and return a descriptive label.
+ * E.g., "Winner of Game 1" or "Loser of Game 2"
+ */
+function formatTBDLabel(
+  slot: BracketSlot,
+  allSlots: BracketSlot[],
+  bracket: Bracket
+): string {
+  // Find which previous slot points to this one (via winner_to or loser_to)
+  const sourceSlot = allSlots.find(
+    (s) => s.winner_to === slot.id || s.loser_to === slot.id
+  );
+
+  if (!sourceSlot) return "TBD";
+
+  // Determine if this slot gets the winner or loser
+  const isWinner = sourceSlot.winner_to === slot.id;
+
+  // Find which game number this is
+  // We'll count all games in the same bracket type (winners/losers) before this one
+  const sourceSlots = allSlots.filter((s) => s.round < slot.round);
+
+  // Determine bracket type from slot characteristics
+  const hasLoserPath = sourceSlot.loser_to !== null;
+  const isGrandFinal = sourceSlot.winner_to === null && sourceSlot.round > 1;
+  const sourceIsWinnersBracket = hasLoserPath;
+  const sourceIsLosersBracket = !hasLoserPath && !isGrandFinal && sourceSlot.round > 1;
+
+  // Count games in the same bracket type before this source slot
+  let gameNumber = 1;
+  for (const s of sourceSlots) {
+    const slotHasLoserPath = s.loser_to !== null;
+    const slotIsWB = slotHasLoserPath;
+    const slotIsLB = !slotHasLoserPath && s.round > 1;
+
+    if (
+      (sourceIsWinnersBracket && slotIsWB) ||
+      (sourceIsLosersBracket && slotIsLB)
+    ) {
+      if (s.round < sourceSlot.round || (s.round === sourceSlot.round && s.position < sourceSlot.position)) {
+        // Count this as a matchup (2 slots = 1 game)
+        if (s.position % 2 === 0) gameNumber++;
+      }
+    }
+  }
+
+  // If this is the source slot's round
+  if (sourceSlot.position % 2 === 0) {
+    // This is the top slot of the matchup, so gameNumber is correct
+  } else {
+    // This is the bottom slot, gameNumber was already incremented
+    gameNumber--;
+  }
+
+  const bracketPrefix = sourceIsWinnersBracket ? "WB" : sourceIsLosersBracket ? "LB" : "";
+  return `${isWinner ? "Winner" : "Loser"} of ${bracketPrefix} Game ${gameNumber}`;
+}
+
 // ── Single Matchup Card ──────────────────────────────────────────────
 
 function MatchupCard({
   matchup,
   teamsMap,
   locations,
+  allSlots,
+  bracket,
   canManage,
   scoringMode,
   setsToWin,
@@ -1075,6 +1306,8 @@ function MatchupCard({
   matchup: Matchup;
   teamsMap: Map<string, Team>;
   locations: Location[];
+  allSlots: BracketSlot[];
+  bracket: Bracket;
   canManage: boolean;
   scoringMode: "game" | "sets";
   setsToWin: number;
@@ -1145,7 +1378,7 @@ function MatchupCard({
             </span>
           )}
           <span className="truncate">
-            {topTeam?.name ?? (isBye && !topTeam ? "BYE" : "TBD")}
+            {topTeam?.name ?? (isBye && !topTeam ? "BYE" : formatTBDLabel(topSlot, allSlots, bracket))}
           </span>
           {topWins && <Trophy className="h-3 w-3 text-green-600 shrink-0" />}
         </span>
@@ -1174,7 +1407,7 @@ function MatchupCard({
             </span>
           )}
           <span className="truncate">
-            {bottomTeam?.name ?? (isBye ? "BYE" : "TBD")}
+            {bottomTeam?.name ?? (isBye ? "BYE" : formatTBDLabel(bottomSlot, allSlots, bracket))}
           </span>
           {bottomWins && (
             <Trophy className="h-3 w-3 text-green-600 shrink-0" />

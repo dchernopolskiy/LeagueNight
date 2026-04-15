@@ -19,6 +19,8 @@ export async function POST(request: NextRequest) {
     seedBy,
     name,
     teamsPerBracket,
+    startDate,
+    daysOfWeek,
     defaultLocationId,
     defaultStartTime,
     defaultDurationMinutes,
@@ -140,6 +142,8 @@ export async function POST(request: NextRequest) {
         default_location_id: defaultLocationId || null,
         default_start_time: defaultStartTime || null,
         default_duration_minutes: defaultDurationMinutes || null,
+        start_date: startDate || null,
+        days_of_week: daysOfWeek || null,
       })
       .select()
       .single();
@@ -162,15 +166,49 @@ export async function POST(request: NextRequest) {
       defaultLocationName = loc?.name || null;
     }
 
-    // Build default scheduled_at: today's date + defaultStartTime if provided
-    function buildDefaultScheduledAt(): string {
-      if (defaultStartTime) {
-        const today = new Date();
-        const [h, m] = defaultStartTime.split(":").map(Number);
-        today.setHours(h, m, 0, 0);
-        return today.toISOString();
+    // Schedule a game based on pattern (start date, days of week, duration)
+    function scheduleGame(gameIndex: number): string {
+      // If no scheduling pattern provided, use current time
+      if (!startDate || !daysOfWeek || !daysOfWeek.length) {
+        if (defaultStartTime) {
+          const date = new Date();
+          const [h, m] = defaultStartTime.split(":").map(Number);
+          date.setHours(h, m, 0, 0);
+          return date.toISOString();
+        }
+        return new Date().toISOString();
       }
-      return new Date().toISOString();
+
+      // Start from the provided start date
+      const date = new Date(startDate + "T00:00:00");
+
+      // Find the next valid day from daysOfWeek
+      while (!daysOfWeek.includes(date.getDay())) {
+        date.setDate(date.getDate() + 1);
+      }
+
+      // Calculate how many games can fit in one day
+      const duration = defaultDurationMinutes || 60;
+      // Assume 4 hours window per day (adjustable)
+      const gamesPerDay = Math.floor((4 * 60) / duration);
+
+      // Determine which session/day this game falls into
+      const sessionIndex = Math.floor(gameIndex / gamesPerDay);
+
+      // Advance to the correct day
+      for (let i = 0; i < sessionIndex; i++) {
+        date.setDate(date.getDate() + 1);
+        while (!daysOfWeek.includes(date.getDay())) {
+          date.setDate(date.getDate() + 1);
+        }
+      }
+
+      // Set the time based on slot within the day
+      const [h, m] = (defaultStartTime || "18:00").split(":").map(Number);
+      const slotWithinDay = gameIndex % gamesPerDay;
+      date.setHours(h, m + (slotWithinDay * duration), 0, 0);
+
+      return date.toISOString();
     }
 
     // Create playoff games for first round matchups.
@@ -195,12 +233,13 @@ export async function POST(request: NextRequest) {
       const bottomSlot = allFirstRoundSlots[i + 1];
 
       if (topSlot?.team_id && bottomSlot?.team_id) {
-        matchupGameIdx.push(gameInserts.length);
+        const gameIdx = gameInserts.length;
+        matchupGameIdx.push(gameIdx);
         gameInserts.push({
           league_id: leagueId,
           home_team_id: topSlot.team_id,
           away_team_id: bottomSlot.team_id,
-          scheduled_at: buildDefaultScheduledAt(),
+          scheduled_at: scheduleGame(gameIdx),
           status: "scheduled",
           is_playoff: true,
           ...(defaultLocationId && { location_id: defaultLocationId, venue: defaultLocationName }),

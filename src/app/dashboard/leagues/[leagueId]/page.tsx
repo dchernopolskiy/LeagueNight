@@ -835,7 +835,9 @@ export default function LeagueOverviewPage() {
                         onValueChange={(v) => v && setSelectedDivisionA(v)}
                       >
                         <SelectTrigger className="flex-1">
-                          <SelectValue placeholder="Select division" />
+                          <SelectValue placeholder="Select division">
+                            {divisions.find((d) => d.id === selectedDivisionA)?.name}
+                          </SelectValue>
                         </SelectTrigger>
                         <SelectContent>
                           {divisions.map((div) => (
@@ -851,7 +853,9 @@ export default function LeagueOverviewPage() {
                         onValueChange={(v) => v && setSelectedDivisionB(v)}
                       >
                         <SelectTrigger className="flex-1">
-                          <SelectValue placeholder="Select division" />
+                          <SelectValue placeholder="Select division">
+                            {divisions.find((d) => d.id === selectedDivisionB)?.name}
+                          </SelectValue>
                         </SelectTrigger>
                         <SelectContent>
                           {divisions.map((div) => (

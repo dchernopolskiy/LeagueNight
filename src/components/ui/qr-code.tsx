@@ -16,7 +16,7 @@ interface QRCodeDialogProps {
 export function QRCodeDialog({ url, title, description, size = 256 }: QRCodeDialogProps) {
   const qrRef = useRef<HTMLDivElement>(null);
 
-  const downloadPDF = async () => {
+  const handlePrint = async () => {
     if (!qrRef.current) return;
 
     const svg = qrRef.current.querySelector("svg");
@@ -118,42 +118,8 @@ export function QRCodeDialog({ url, title, description, size = 256 }: QRCodeDial
     img.src = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svgData)));
   };
 
-  const handlePrint = () => {
-    window.print();
-  };
-
   return (
-    <>
-      <style jsx global>{`
-        @media print {
-          /* Hide everything except the print content */
-          body > *:not(.print-qr-only) {
-            display: none !important;
-          }
-
-          .print-qr-only {
-            display: flex !important;
-            position: fixed;
-            inset: 0;
-            background: white;
-            flex-direction: column;
-            align-items: center;
-            justify-center: padding: 40px;
-          }
-
-          /* Remove browser headers/footers */
-          @page {
-            size: auto;
-            margin: 0mm;
-          }
-        }
-
-        .print-qr-only {
-          display: none;
-        }
-      `}</style>
-
-      <Dialog>
+    <Dialog>
         <DialogTrigger render={<Button variant="outline" size="sm" className="gap-2" />}>
           <QrCode className="h-4 w-4" />
         </DialogTrigger>
@@ -180,45 +146,17 @@ export function QRCodeDialog({ url, title, description, size = 256 }: QRCodeDial
             </div>
             <div className="flex gap-2 w-full">
               <Button
-                variant="outline"
-                className="flex-1 gap-2"
+                variant="default"
+                className="w-full gap-2"
                 onClick={handlePrint}
               >
                 <Printer className="h-4 w-4" />
                 Print
               </Button>
-              <Button
-                variant="default"
-                className="flex-1 gap-2"
-                onClick={downloadPDF}
-              >
-                <Download className="h-4 w-4" />
-                Download PDF
-              </Button>
             </div>
           </div>
         </DialogContent>
       </Dialog>
-
-      {/* Print-only content */}
-      <div className="print-qr-only">
-        <h1 style={{ fontSize: '32px', margin: '0 0 16px 0', textAlign: 'center' }}>{title}</h1>
-        {description && (
-          <p style={{ fontSize: '14px', color: '#666', margin: '8px 0', textAlign: 'center' }}>{description}</p>
-        )}
-        <div style={{ margin: '24px 0', padding: '16px', background: 'white', border: '2px solid #e5e7eb', borderRadius: '8px' }}>
-          <QRCodeSVG
-            value={url}
-            size={size}
-            level="H"
-            includeMargin={false}
-          />
-        </div>
-        <p style={{ fontSize: '12px', color: '#666', wordBreak: 'break-all', maxWidth: '400px', fontFamily: 'monospace', textAlign: 'center' }}>
-          {url}
-        </p>
-      </div>
-    </>
   );
 }
 

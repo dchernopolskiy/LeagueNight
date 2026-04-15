@@ -75,6 +75,8 @@ export interface Bracket {
   default_location_id: string | null;
   default_start_time: string | null;
   default_duration_minutes: number | null;
+  start_date: string | null;
+  days_of_week: number[] | null;
   created_at: string;
 }
 
