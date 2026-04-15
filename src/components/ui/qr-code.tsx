@@ -44,11 +44,9 @@ export function QRCodeDialog({ url, title, description, size = 256 }: QRCodeDial
 
   return (
     <Dialog>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="gap-2">
-          <QrCode className="h-4 w-4" />
-          QR Code
-        </Button>
+      <DialogTrigger render={<Button variant="outline" size="sm" className="gap-2" />}>
+        <QrCode className="h-4 w-4" />
+        QR Code
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
