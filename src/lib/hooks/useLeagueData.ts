@@ -30,6 +30,9 @@ interface UseLeagueDataReturn extends LeagueData {
   refetch: () => Promise<void>;
 }
 
+// Default options object - created once to maintain stable reference
+const DEFAULT_OPTIONS = {};
+
 /**
  * Comprehensive hook for loading all league-related data.
  * Handles loading states, errors, and provides a refetch function.
@@ -44,7 +47,7 @@ export function useLeagueData(
     includePlayers?: boolean;
     includePatterns?: boolean;
     includeStaff?: boolean;
-  } = {}
+  } = DEFAULT_OPTIONS
 ): UseLeagueDataReturn {
   // Memoize options to prevent unnecessary re-renders
   const memoizedOptions = useMemo(() => options, [

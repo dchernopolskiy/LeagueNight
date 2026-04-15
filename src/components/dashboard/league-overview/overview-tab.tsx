@@ -124,29 +124,23 @@ export function LeagueOverviewTab({
           </div>
 
           {league.is_public && (
-            <div className="space-y-3">
-              <div>
-                <h3 className="font-semibold text-sm mb-1">Public Link</h3>
+            <div>
+              <h3 className="font-semibold text-sm mb-2">Share League</h3>
+              <div className="flex items-center gap-2">
+                <QRCodeDialog
+                  url={`${typeof window !== 'undefined' ? window.location.origin : ''}/league/${league.slug}`}
+                  title={league.name}
+                  description="Scan to view schedule & standings"
+                />
                 <PublicLinkCopy slug={league.slug} />
-              </div>
-              <div>
-                <h3 className="font-semibold text-sm mb-2">Share League</h3>
-                <div className="flex gap-2">
-                  <QRCodeDialog
-                    url={`${typeof window !== 'undefined' ? window.location.origin : ''}/league/${league.slug}`}
-                    title={league.name}
-                    description="Scan to view league info, schedule, and standings"
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => window.print()}
-                    className="gap-2"
-                  >
-                    <Printer className="h-4 w-4" />
-                    Print Poster
-                  </Button>
-                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-3"
+                  onClick={() => window.open(`/league/${league.slug}`, '_blank')}
+                >
+                  Open
+                </Button>
               </div>
             </div>
           )}
