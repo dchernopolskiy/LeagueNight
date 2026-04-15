@@ -1,7 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/supabase/helpers";
-import { generateRoundRobin, assignDates } from "@/lib/scheduling/round-robin";
+import { generateRoundRobin, assignDates, assignDatesWithPreferences } from "@/lib/scheduling/round-robin";
 import { NextRequest, NextResponse } from "next/server";
 
 /**
@@ -100,10 +100,10 @@ export async function POST(request: NextRequest) {
     .single();
   const timezone = leagueInfo?.timezone || "America/New_York";
 
-  // Get teams
+  // Get teams with preferences
   const { data: teams } = await supabase
     .from("teams")
-    .select("id, division_id")
+    .select("id, division_id, name, preferences")
     .eq("league_id", leagueId);
 
   if (!teams || teams.length < 2) {
@@ -306,7 +306,15 @@ export async function POST(request: NextRequest) {
     ? locationsData.reduce((sum, l) => sum + l.court_count, 0)
     : (pattern.court_count || 1);
 
-  const scheduled = assignDates(
+  // Build teams map for preference-aware scheduling
+  const teamsMap = new Map();
+  if (teams) {
+    for (const team of teams) {
+      teamsMap.set(team.id, team);
+    }
+  }
+
+  const scheduled = assignDatesWithPreferences(
     allMatchups,
     {
       dayOfWeek: pattern.day_of_week,
@@ -318,6 +326,7 @@ export async function POST(request: NextRequest) {
       durationMinutes: pattern.duration_minutes || 60,
       skipDates: mergedSkipDates,
     },
+    teamsMap,
     gamesPerSession
   );
 
@@ -424,6 +433,8 @@ export async function POST(request: NextRequest) {
           week_number: g.weekNumber,
           status: "scheduled",
           location_id: slot.locationId,
+          preference_applied: g.preferenceApplied || null,
+          scheduling_notes: g.schedulingNotes || null,
         });
       }
     }
@@ -440,6 +451,8 @@ export async function POST(request: NextRequest) {
         week_number: g.weekNumber,
         status: "scheduled",
         location_id: pattern.location_ids?.[0] || null,
+        preference_applied: g.preferenceApplied || null,
+        scheduling_notes: g.schedulingNotes || null,
       });
     }
   }

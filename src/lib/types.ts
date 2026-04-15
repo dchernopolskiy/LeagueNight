@@ -148,6 +148,11 @@ export interface GameDayPattern {
   skip_dates: string[];
 }
 
+export interface PreferenceApplied {
+  home_team?: string[]; // Which preferences were applied for home team
+  away_team?: string[]; // Which preferences were applied for away team
+}
+
 export interface Game {
   id: string;
   league_id: string;
@@ -163,6 +168,8 @@ export interface Game {
   is_playoff: boolean;
   week_number: number | null;
   location_id: string | null;
+  preference_applied?: PreferenceApplied | null;
+  scheduling_notes?: string | null;
   created_at: string;
 }
 

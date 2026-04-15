@@ -34,6 +34,7 @@ import { useLeagueRole } from "@/lib/league-role-context";
 import { GameDaySetupPanel } from "@/components/dashboard/game-day-setup";
 import { useLeagueData, useLocations } from "@/lib/hooks";
 import { QRCodeDialog } from "@/components/ui/qr-code";
+import { PreferenceIndicator } from "@/components/dashboard/preference-indicator";
 
 
 export default function SchedulePage() {
@@ -495,10 +496,18 @@ export default function SchedulePage() {
 
                       return (
                         <div key={game.id} className="flex items-center justify-between py-2 border-b last:border-0">
-                          <div>
-                            <span className="text-sm font-medium">
-                              {teamsMap.get(game.home_team_id)?.name} vs {teamsMap.get(game.away_team_id)?.name}
-                            </span>
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium">
+                                {teamsMap.get(game.home_team_id)?.name} vs {teamsMap.get(game.away_team_id)?.name}
+                              </span>
+                              <PreferenceIndicator
+                                preferenceApplied={game.preference_applied}
+                                homeTeamName={teamsMap.get(game.home_team_id)?.name}
+                                awayTeamName={teamsMap.get(game.away_team_id)?.name}
+                                variant="badge"
+                              />
+                            </div>
                             <p className="text-xs text-muted-foreground">
                               {format(new Date(game.scheduled_at), "EEE, MMM d 'at' h:mm a")}
                               {game.location_id && locationsMap.get(game.location_id)?.name
@@ -508,6 +517,11 @@ export default function SchedulePage() {
                                   : ""}
                               {game.court && ` (${game.court})`}
                             </p>
+                            {game.scheduling_notes && (
+                              <p className="text-xs text-blue-600 italic mt-1">
+                                {game.scheduling_notes}
+                              </p>
+                            )}
                           </div>
                           <div className="flex items-center gap-1">
                             {game.status === "cancelled" ? (
