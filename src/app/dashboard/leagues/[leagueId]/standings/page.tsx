@@ -19,7 +19,6 @@ import { format } from "date-fns";
 import { Download, Pencil } from "lucide-react";
 import { generateStandingsPdf } from "@/lib/export/standings-pdf";
 import type { Game, Team, Standing, League, LeagueSettings } from "@/lib/types";
-import { QRCodeDialog } from "@/components/ui/qr-code";
 
 export default function StandingsPage() {
   const { leagueId } = useParams<{ leagueId: string }>();
@@ -216,21 +215,12 @@ export default function StandingsPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="text-base">Standings</CardTitle>
-            <div className="flex gap-2">
-              {league?.is_public && (
-                <QRCodeDialog
-                  url={`${typeof window !== 'undefined' ? window.location.origin : ''}/league/${league.slug}/standings${activeDivisionId ? `?division=${activeDivisionId}` : ''}`}
-                  title={`${league.name} - Standings`}
-                  description="Scan to view public standings"
-                />
-              )}
-              {filteredStandings.length > 0 && (
-                <Button variant="outline" size="sm" onClick={exportStandingsPdf}>
-                  <Download className="h-4 w-4 mr-1" />
-                  Export PDF
-                </Button>
-              )}
-            </div>
+            {filteredStandings.length > 0 && (
+              <Button variant="outline" size="sm" onClick={exportStandingsPdf}>
+                <Download className="h-4 w-4 mr-1" />
+                Export PDF
+              </Button>
+            )}
           </div>
         </CardHeader>
         <CardContent>

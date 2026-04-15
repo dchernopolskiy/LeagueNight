@@ -40,6 +40,7 @@ import type { LeagueStaff } from "@/lib/types";
 import { useLeagueData } from "@/lib/hooks";
 import { PublicLinkCopy } from "@/components/dashboard/public-link-copy";
 import { QRCodeDialog } from "@/components/ui/qr-code";
+import { LeaguePrintPoster } from "@/components/dashboard/league-print-poster";
 
 export default function LeagueOverviewPage() {
   const { leagueId } = useParams<{ leagueId: string }>();
@@ -1186,6 +1187,11 @@ export default function LeagueOverviewPage() {
             </CardContent>
           </Card>
         </div>
+      )}
+
+      {/* Print-only poster */}
+      {league && league.is_public && (
+        <LeaguePrintPoster league={league} />
       )}
     </div>
   );

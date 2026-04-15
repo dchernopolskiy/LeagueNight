@@ -2,10 +2,12 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Users, Calendar, Trophy } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Users, Calendar, Trophy, Printer } from "lucide-react";
 import { format } from "date-fns";
 import type { League, Team, Player, Game } from "@/lib/types";
 import { PublicLinkCopy } from "@/components/dashboard/public-link-copy";
+import { QRCodeDialog } from "@/components/ui/qr-code";
 
 interface LeagueOverviewTabProps {
   league: League | null;
@@ -122,9 +124,30 @@ export function LeagueOverviewTab({
           </div>
 
           {league.is_public && (
-            <div>
-              <h3 className="font-semibold text-sm mb-1">Public Link</h3>
-              <PublicLinkCopy slug={league.slug} />
+            <div className="space-y-3">
+              <div>
+                <h3 className="font-semibold text-sm mb-1">Public Link</h3>
+                <PublicLinkCopy slug={league.slug} />
+              </div>
+              <div>
+                <h3 className="font-semibold text-sm mb-2">Share League</h3>
+                <div className="flex gap-2">
+                  <QRCodeDialog
+                    url={`${typeof window !== 'undefined' ? window.location.origin : ''}/league/${league.slug}`}
+                    title={league.name}
+                    description="Scan to view league info, schedule, and standings"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => window.print()}
+                    className="gap-2"
+                  >
+                    <Printer className="h-4 w-4" />
+                    Print Poster
+                  </Button>
+                </div>
+              </div>
             </div>
           )}
         </CardContent>

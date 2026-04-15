@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type {
   League,
@@ -46,12 +46,20 @@ export function useLeagueData(
     includeStaff?: boolean;
   } = {}
 ): UseLeagueDataReturn {
+  // Memoize options to prevent unnecessary re-renders
+  const memoizedOptions = useMemo(() => options, [
+    options.includeGames,
+    options.includePlayers,
+    options.includePatterns,
+    options.includeStaff,
+  ]);
+
   const {
     includeGames = true,
     includePlayers = true,
     includePatterns = true,
     includeStaff = true,
-  } = options;
+  } = memoizedOptions;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

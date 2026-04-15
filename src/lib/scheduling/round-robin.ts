@@ -433,6 +433,8 @@ export function assignDatesWithPreferences(
 
     const assignedMatchups = new Set<number>();
     const usedSlots = new Set<number>();
+    // Track which teams are playing at which time (to prevent double-booking)
+    const teamsAtTime = new Map<string, Set<string>>(); // time -> set of team IDs
 
     // Greedy assignment
     for (const assignment of scoredAssignments) {
@@ -441,6 +443,14 @@ export function assignDatesWithPreferences(
 
       const matchup = dayMatchups[assignment.matchupIdx];
       const slot = availableSlots[assignment.slotIdx];
+      const timeKey = slot.time.toISOString();
+
+      // Check if either team is already playing at this time
+      const teamsAtThisTime = teamsAtTime.get(timeKey) || new Set<string>();
+      if (teamsAtThisTime.has(matchup.home) || teamsAtThisTime.has(matchup.away)) {
+        continue; // Skip this assignment - team conflict
+      }
+
       const courtNum = slot.slotIndex % courtCount;
 
       result.push({
@@ -456,34 +466,53 @@ export function assignDatesWithPreferences(
 
       assignedMatchups.add(assignment.matchupIdx);
       usedSlots.add(assignment.slotIdx);
+
+      // Mark both teams as busy at this time
+      teamsAtThisTime.add(matchup.home);
+      teamsAtThisTime.add(matchup.away);
+      teamsAtTime.set(timeKey, teamsAtThisTime);
     }
 
     // Fallback for unassigned matchups
     for (let m = 0; m < dayMatchups.length; m++) {
       if (assignedMatchups.has(m)) continue;
 
-      // Find first available slot
+      const matchup = dayMatchups[m];
+
+      // Find first available slot without team conflicts
       for (let s = 0; s < availableSlots.length; s++) {
-        if (!usedSlots.has(s)) {
-          const matchup = dayMatchups[m];
-          const slot = availableSlots[s];
-          const courtNum = slot.slotIndex % courtCount;
+        if (usedSlots.has(s)) continue;
 
-          result.push({
-            home: matchup.home,
-            away: matchup.away,
-            scheduledAt: slot.time,
-            venue,
-            court: courtCount > 1 ? `Court ${courtNum + 1}` : null,
-            weekNumber: weekNum,
-            preferenceApplied: null,
-            schedulingNotes: "Fallback assignment (no slot scored positively)",
-          });
+        const slot = availableSlots[s];
+        const timeKey = slot.time.toISOString();
+        const teamsAtThisTime = teamsAtTime.get(timeKey) || new Set<string>();
 
-          usedSlots.add(s);
-          assignedMatchups.add(m);
-          break;
+        // Check for team conflict
+        if (teamsAtThisTime.has(matchup.home) || teamsAtThisTime.has(matchup.away)) {
+          continue; // Team already playing at this time
         }
+
+        const courtNum = slot.slotIndex % courtCount;
+
+        result.push({
+          home: matchup.home,
+          away: matchup.away,
+          scheduledAt: slot.time,
+          venue,
+          court: courtCount > 1 ? `Court ${courtNum + 1}` : null,
+          weekNumber: weekNum,
+          preferenceApplied: null,
+          schedulingNotes: "Fallback assignment (no slot scored positively)",
+        });
+
+        usedSlots.add(s);
+        assignedMatchups.add(m);
+
+        // Mark teams as busy
+        teamsAtThisTime.add(matchup.home);
+        teamsAtThisTime.add(matchup.away);
+        teamsAtTime.set(timeKey, teamsAtThisTime);
+        break;
       }
     }
 
