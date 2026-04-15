@@ -11,6 +11,8 @@ interface LeagueRoleContextValue {
   isPlayer: boolean;
   /** true if organizer or staff — i.e. can manage the league */
   canManage: boolean;
+  /** The user's player ID in this league (if they are a player) */
+  playerId?: string | null;
 }
 
 const LeagueRoleContext = createContext<LeagueRoleContextValue>({
@@ -19,14 +21,17 @@ const LeagueRoleContext = createContext<LeagueRoleContextValue>({
   isStaff: false,
   isPlayer: true,
   canManage: false,
+  playerId: null,
 });
 
 export function LeagueRoleProvider({
   children,
   role,
+  playerId,
 }: {
   children: React.ReactNode;
   role: LeagueRole;
+  playerId?: string | null;
 }) {
   const isOrganizer = role === "organizer";
   const isStaff = role === "staff";
@@ -35,7 +40,7 @@ export function LeagueRoleProvider({
 
   return (
     <LeagueRoleContext.Provider
-      value={{ role, isOrganizer, isStaff, isPlayer, canManage }}
+      value={{ role, isOrganizer, isStaff, isPlayer, canManage, playerId }}
     >
       {children}
     </LeagueRoleContext.Provider>

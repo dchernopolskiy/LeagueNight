@@ -57,6 +57,7 @@ export function TeamsManager({
   divisions = [],
   activeDivisionId,
   canManage = true,
+  currentPlayerId = null,
 }: {
   leagueId: string;
   initialTeams: Team[];
@@ -64,6 +65,7 @@ export function TeamsManager({
   divisions?: Division[];
   activeDivisionId?: string;
   canManage?: boolean;
+  currentPlayerId?: string | null;
 }) {
   const [teams, setTeams] = useState(initialTeams);
   const [players, setPlayers] = useState(initialPlayers);
@@ -615,7 +617,7 @@ export function TeamsManager({
                   </span>
                   <div className="flex items-center gap-1 shrink-0">
                     <Badge variant="secondary">{teamPlayers.length} players</Badge>
-                    {!isEditingThisTeam && canManage && (
+                    {!isEditingThisTeam && (canManage || team.captain_player_id === currentPlayerId) && (
                       <DropdownMenu>
                         <DropdownMenuTrigger>
                           <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
@@ -623,27 +625,33 @@ export function TeamsManager({
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem
-                            onClick={() => {
-                              setEditingTeamId(team.id);
-                              setEditingTeamName(team.name);
-                            }}
-                          >
-                            <Pencil className="h-3.5 w-3.5 mr-1.5" />
-                            Rename team
-                          </DropdownMenuItem>
+                          {canManage && (
+                            <DropdownMenuItem
+                              onClick={() => {
+                                setEditingTeamId(team.id);
+                                setEditingTeamName(team.name);
+                              }}
+                            >
+                              <Pencil className="h-3.5 w-3.5 mr-1.5" />
+                              Rename team
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuItem onClick={() => openTeamPreferences(team)}>
                             <Settings2 className="h-3.5 w-3.5 mr-1.5" />
                             Scheduling preferences
                           </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            variant="destructive"
-                            onClick={() => { setDeletingTeamId(team.id); setMoveToSubPool(true); }}
-                          >
-                            <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-                            Delete team
-                          </DropdownMenuItem>
+                          {canManage && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                variant="destructive"
+                                onClick={() => { setDeletingTeamId(team.id); setMoveToSubPool(true); }}
+                              >
+                                <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                                Delete team
+                              </DropdownMenuItem>
+                            </>
+                          )}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     )}

@@ -56,9 +56,10 @@ export default async function LeagueLayout({
 
   // Determine highest role: organizer > staff > player
   const role: LeagueRole = isOrganizer ? "organizer" : isStaff ? "staff" : "player";
+  const playerId = playerRes.data?.[0]?.id || null;
 
   return (
-    <LeagueRoleProvider role={role}>
+    <LeagueRoleProvider role={role} playerId={playerId}>
       <div>
         {/* Breadcrumb navigation */}
         <nav className="flex items-center gap-1.5 text-sm text-muted-foreground mb-3">

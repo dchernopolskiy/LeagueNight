@@ -11,6 +11,6 @@ export function TeamsManagerWrapper(props: {
   divisions?: Division[];
   activeDivisionId?: string;
 }) {
-  const { canManage } = useLeagueRole();
-  return <TeamsManager {...props} canManage={canManage} />;
+  const { canManage, playerId } = useLeagueRole();
+  return <TeamsManager {...props} canManage={canManage} currentPlayerId={playerId} />;
 }
