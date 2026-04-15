@@ -393,7 +393,7 @@ export default function SchedulePage() {
                     const byeTeams = relevantTeams.filter((t) => !teamsPlaying.has(t.id));
                     if (byeTeams.length === 0) return null;
                     return (
-                      <div className="flex items-center gap-1.5 mb-2">
+                      <div className="flex flex-wrap items-center gap-1.5 mb-2">
                         <span className="text-xs text-muted-foreground">BYE:</span>
                         {byeTeams.map((t) => (
                           <Badge key={t.id} variant="outline" className="text-xs text-muted-foreground">

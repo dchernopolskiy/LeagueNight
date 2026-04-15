@@ -43,3 +43,22 @@ ROADMAP.md
 .scavenger/
 Project.md
 PREFERENCE_SCHEDULING.md
+Data/2026-SPRING-volleyball.pdf
+Data/B League - 17 teams - RMS MMS TOC.pdf
+Data/Reverse League - 22 teams - RMS MMS TOC - Revised April 6.pdf
+scripts/check-cursors-db.ts
+scripts/check-teams.ts
+scripts/cleanup-orphaned-games.ts
+scripts/complete-fix-notifications.ts
+scripts/debug-notifications.ts
+scripts/deep-debug-unread.ts
+scripts/delete-old-messages.ts
+scripts/delete-orphaned-teams.ts
+scripts/final-cleanup.ts
+scripts/find-direct-message.ts
+scripts/fix-reverse-notifications.ts
+scripts/force-cleanup-old-teams.ts
+scripts/recreate-volleyball-data.ts
+scripts/recreate-volleyball-env.ts
+scripts/recreate-volleyball-simple.ts
+scripts/ultimate-cleanup.ts
