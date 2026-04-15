@@ -353,7 +353,7 @@ export default function PublicLeaguePage() {
                             >
                               <div>
                                 <span className="font-medium">
-                                  {isHome ? "vs" : "@"} {opponent?.name}
+                                  vs {opponent?.name}
                                 </span>
                               </div>
                               <div className="text-right text-xs text-muted-foreground">
@@ -491,7 +491,7 @@ export default function PublicLeaguePage() {
         )}
 
         <p className="text-center text-xs text-muted-foreground pb-8">
-          Powered by BenchWarmer
+          Powered by LeagueNight
         </p>
       </div>
     </div>

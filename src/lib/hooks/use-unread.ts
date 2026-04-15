@@ -63,9 +63,32 @@ export function useUnread() {
     listeners.forEach((fn) => fn());
   }, []);
 
+  const markAllRead = useCallback(async (leagueId: string) => {
+    // Mark all channels in this league as read
+    const channelKeys = Object.keys(cachedData.channels).filter((key) =>
+      key.startsWith(`${leagueId}:`)
+    );
+
+    for (const fullKey of channelKeys) {
+      const channelKey = fullKey.substring(leagueId.length + 1);
+      await fetch("/api/chat/read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leagueId, channelKey }),
+      });
+    }
+
+    // Optimistically clear all channels for this league
+    for (const fullKey of channelKeys) {
+      delete cachedData.channels[fullKey];
+    }
+    cachedData.leagues[leagueId] = 0;
+    listeners.forEach((fn) => fn());
+  }, []);
+
   const refresh = useCallback(() => fetchUnread(), []);
 
   const totalUnread = Object.values(data.leagues).reduce((a, b) => a + b, 0);
 
-  return { ...data, totalUnread, markRead, refresh };
+  return { ...data, totalUnread, markRead, markAllRead, refresh };
 }

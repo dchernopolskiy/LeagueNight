@@ -40,6 +40,7 @@ import {
   Check,
   X,
   Flag,
+  CheckCheck,
 } from "lucide-react";
 import { format } from "date-fns";
 import type { Message, MessageReport, Player, Team, Division } from "@/lib/types";
@@ -99,7 +100,7 @@ export default function ChatPage() {
 
   // Announcement confirmation
   const [announcementStatus, setAnnouncementStatus] = useState<string | null>(null);
-  const { channels: channelUnread, markRead } = useUnread();
+  const { channels: channelUnread, markRead, markAllRead } = useUnread();
 
   // Find the player's team(s) and division(s)
   const myPlayerRecord = useMemo(() => {
@@ -653,6 +654,16 @@ export default function ChatPage() {
                 <Badge variant="outline" className="text-xs">Private</Badge>
               )}
               <div className="ml-auto flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2"
+                  onClick={() => markAllRead(leagueId)}
+                  title="Mark all channels as read"
+                >
+                  <CheckCheck className="h-3.5 w-3.5 text-muted-foreground mr-1" />
+                  <span className="text-xs">Mark All Read</span>
+                </Button>
                 {isOrganizer && (
                   <Button
                     variant="ghost"

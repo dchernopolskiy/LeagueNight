@@ -1,5 +1,5 @@
 /**
- * Scheduling date utilities for BenchWarmer
+ * Scheduling date utilities for LeagueNight
  */
 
 /**

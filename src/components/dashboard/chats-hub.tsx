@@ -152,8 +152,10 @@ function UnreadDot({ count }: { count: number }) {
 export function ChatsHub({ leagues, teamsByLeague, playerTeamNames, latestMessages }: Props) {
   const { channels: unreadChannels, leagues: unreadLeagues } = useUnread();
 
-  // All leagues expanded by default
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // All leagues collapsed by default
+  const [collapsed, setCollapsed] = useState<Set<string>>(
+    new Set(leagues.map((l) => l.id))
+  );
 
   function toggleLeague(id: string) {
     setCollapsed((prev) => {
