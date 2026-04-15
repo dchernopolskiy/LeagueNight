@@ -44,8 +44,10 @@ import {
   Settings2,
   Calendar,
   X,
+  ArrowUpCircle,
+  XCircle,
 } from "lucide-react";
-import type { Team, Player, Division, TeamPreferences } from "@/lib/types";
+import type { Team, Player, Division, TeamPreferences, Standing } from "@/lib/types";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { useRouter } from "next/navigation";
@@ -55,6 +57,7 @@ export function TeamsManager({
   initialTeams,
   initialPlayers,
   divisions = [],
+  standings = [],
   activeDivisionId,
   canManage = true,
   currentPlayerId = null,
@@ -63,6 +66,7 @@ export function TeamsManager({
   initialTeams: Team[];
   initialPlayers: Player[];
   divisions?: Division[];
+  standings?: Standing[];
   activeDivisionId?: string;
   canManage?: boolean;
   currentPlayerId?: string | null;
@@ -92,6 +96,13 @@ export function TeamsManager({
   const [deletingTeamId, setDeletingTeamId] = useState<string | null>(null);
   const [moveToSubPool, setMoveToSubPool] = useState(true);
 
+  // Team promotion dialog
+  const [promotingTeamId, setPromotingTeamId] = useState<string | null>(null);
+  const [promotionDivisionId, setPromotionDivisionId] = useState<string>("");
+
+  // Team drop out dialog
+  const [droppingOutTeamId, setDroppingOutTeamId] = useState<string | null>(null);
+
   // Team preferences dialog
   const [editingPreferencesTeamId, setEditingPreferencesTeamId] = useState<string | null>(null);
   const [preferredTime, setPreferredTime] = useState<"early" | "late" | "">("");
@@ -112,6 +123,44 @@ export function TeamsManager({
   const displayedTeams = activeDivisionId
     ? teams.filter((t) => t.division_id === activeDivisionId)
     : teams;
+
+  // Calculate promotion suggestions
+  const promotionSuggestions = canManage && divisions.length > 1 ? (() => {
+    const suggestions: Array<{
+      team: Team;
+      standing: Standing;
+      weight: number;
+      gamesPlayed: number;
+      division: Division | undefined;
+    }> = [];
+
+    for (const team of teams) {
+      const standing = standings.find((s) => s.team_id === team.id);
+      if (!standing) continue;
+
+      const gamesPlayed = standing.wins + standing.losses + standing.ties;
+      if (gamesPlayed < 8) continue; // Only suggest after 8 games
+
+      // Calculate weight: 8-0 = 10, 7-1 = 9, 6-2 = 8, etc.
+      const weight = standing.wins - standing.losses;
+
+      // Only suggest teams with positive records
+      if (weight <= 0) continue;
+
+      const currentDivision = divisions.find((d) => d.id === team.division_id);
+
+      suggestions.push({
+        team,
+        standing,
+        weight,
+        gamesPlayed,
+        division: currentDivision,
+      });
+    }
+
+    // Sort by weight descending and return top 3
+    return suggestions.sort((a, b) => b.weight - a.weight).slice(0, 3);
+  })() : [];
 
   async function addTeam() {
     if (!newTeamName.trim()) return;
@@ -135,15 +184,19 @@ export function TeamsManager({
     setAddingPlayer(true);
     setPlayerError(null);
     const supabase = createClient();
+
+    // Handle "none" or empty string as null for sub pool
+    const finalTeamId = (!playerTeamId || playerTeamId === "none") ? null : playerTeamId;
+
     const { data, error } = await supabase
       .from("players")
       .insert({
         league_id: leagueId,
-        team_id: playerTeamId || null,
+        team_id: finalTeamId,
         name: playerName.trim(),
         email: playerEmail.trim() || null,
         phone: playerPhone.trim() || null,
-        is_sub: !playerTeamId,
+        is_sub: finalTeamId === null,
       })
       .select()
       .single();
@@ -198,6 +251,37 @@ export function TeamsManager({
         )
       );
     }
+  }
+
+  async function confirmPromoteTeam() {
+    if (!promotingTeamId || !promotionDivisionId) return;
+    await changeDivision(promotingTeamId, promotionDivisionId === "none" ? null : promotionDivisionId);
+    setPromotingTeamId(null);
+    setPromotionDivisionId("");
+  }
+
+  async function confirmDropOutTeam() {
+    if (!droppingOutTeamId) return;
+    const teamId = droppingOutTeamId;
+    const supabase = createClient();
+
+    // Move players to sub pool
+    await supabase
+      .from("players")
+      .update({ team_id: null, is_sub: true })
+      .eq("team_id", teamId);
+    setPlayers(
+      players.map((p) =>
+        p.team_id === teamId ? { ...p, team_id: null, is_sub: true } : p
+      )
+    );
+
+    // Delete the team
+    const { error } = await supabase.from("teams").delete().eq("id", teamId);
+    if (!error) {
+      setTeams(teams.filter((t) => t.id !== teamId));
+    }
+    setDroppingOutTeamId(null);
   }
 
   async function renameTeam(teamId: string) {
@@ -534,7 +618,7 @@ export function TeamsManager({
 
   return (
     <div className="space-y-6">
-      {/* Add team — managers only */}
+      {/* Add team and player — managers only */}
       {canManage && (
         <div className="flex gap-2">
           <Input
@@ -547,6 +631,111 @@ export function TeamsManager({
             <Plus className="h-4 w-4 mr-1" />
             Add Team
           </Button>
+          <Dialog>
+            <DialogTrigger>
+              <Button variant="outline">
+                <UserPlus className="h-4 w-4 mr-2" />
+                Add Player
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Add a Player</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4 pt-2">
+                {playerError && (
+                  <p className="text-sm text-destructive bg-destructive/10 px-3 py-2 rounded">
+                    {playerError}
+                  </p>
+                )}
+                <div className="space-y-2">
+                  <Label>Name *</Label>
+                  <Input
+                    value={playerName}
+                    onChange={(e) => setPlayerName(e.target.value)}
+                    placeholder="Jane Smith"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Email</Label>
+                  <Input
+                    type="email"
+                    value={playerEmail}
+                    onChange={(e) => setPlayerEmail(e.target.value)}
+                    placeholder="jane@example.com"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Phone</Label>
+                  <Input
+                    value={playerPhone}
+                    onChange={(e) => setPlayerPhone(e.target.value)}
+                    placeholder="+1 555-1234"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Team</Label>
+                  <Select value={playerTeamId} onValueChange={(v) => v && setPlayerTeamId(v)}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Sub pool (no team)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Sub pool (no team)</SelectItem>
+                      {divisions.length > 0 ? (
+                        <>
+                          {divisions.map((div) => {
+                            const divTeams = teams.filter(
+                              (t) => t.division_id === div.id
+                            );
+                            if (divTeams.length === 0) return null;
+                            return (
+                              <div key={div.id}>
+                                <p className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
+                                  {div.name}
+                                </p>
+                                {divTeams.map((t) => (
+                                  <SelectItem key={t.id} value={t.id}>
+                                    {t.name}
+                                  </SelectItem>
+                                ))}
+                              </div>
+                            );
+                          })}
+                          {teams.filter((t) => !t.division_id).length > 0 && (
+                            <div>
+                              <p className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
+                                No division
+                              </p>
+                              {teams
+                                .filter((t) => !t.division_id)
+                                .map((t) => (
+                                  <SelectItem key={t.id} value={t.id}>
+                                    {t.name}
+                                  </SelectItem>
+                                ))}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        teams.map((t) => (
+                          <SelectItem key={t.id} value={t.id}>
+                            {t.name}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button
+                  onClick={addPlayer}
+                  disabled={addingPlayer || !playerName.trim()}
+                  className="w-full"
+                >
+                  {addingPlayer ? "Adding..." : "Add Player"}
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
         </div>
       )}
 
@@ -556,6 +745,55 @@ export function TeamsManager({
           Showing <span className="font-medium text-foreground">{activeDivisionName}</span>{" "}
           ({displayedTeams.length} {displayedTeams.length === 1 ? "team" : "teams"})
         </p>
+      )}
+
+      {/* Promotion suggestions */}
+      {promotionSuggestions.length > 0 && (
+        <Card className="border-amber-200 bg-amber-50/50">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <ArrowUpCircle className="h-4 w-4 text-amber-600" />
+              Division Promotion Suggestions
+            </CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Based on performance after 8+ games. Suggestions refresh automatically when standings update.
+            </p>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {promotionSuggestions.map((suggestion) => (
+                <div
+                  key={suggestion.team.id}
+                  className="flex items-center justify-between bg-white rounded-lg p-3 border"
+                >
+                  <div className="flex items-center gap-3">
+                    <Badge variant="secondary" className="font-mono">
+                      {suggestion.standing.wins}-{suggestion.standing.losses}
+                      {suggestion.standing.ties > 0 && `-${suggestion.standing.ties}`}
+                    </Badge>
+                    <div>
+                      <p className="font-medium text-sm">{suggestion.team.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {suggestion.division?.name || "No division"} • Weight: {suggestion.weight}
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setPromotingTeamId(suggestion.team.id);
+                      setPromotionDivisionId("");
+                    }}
+                  >
+                    <ArrowUpCircle className="h-3.5 w-3.5 mr-1.5" />
+                    Promote
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Teams grid */}
@@ -640,9 +878,22 @@ export function TeamsManager({
                             <Settings2 className="h-3.5 w-3.5 mr-1.5" />
                             Scheduling preferences
                           </DropdownMenuItem>
+                          {canManage && divisions.length > 1 && (
+                            <DropdownMenuItem onClick={() => setPromotingTeamId(team.id)}>
+                              <ArrowUpCircle className="h-3.5 w-3.5 mr-1.5" />
+                              Change division
+                            </DropdownMenuItem>
+                          )}
                           {canManage && (
                             <>
                               <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                variant="destructive"
+                                onClick={() => setDroppingOutTeamId(team.id)}
+                              >
+                                <XCircle className="h-3.5 w-3.5 mr-1.5" />
+                                Drop out of season
+                              </DropdownMenuItem>
                               <DropdownMenuItem
                                 variant="destructive"
                                 onClick={() => { setDeletingTeamId(team.id); setMoveToSubPool(true); }}
@@ -665,7 +916,11 @@ export function TeamsManager({
                     }
                   >
                     <SelectTrigger className="h-7 text-xs w-auto">
-                      <SelectValue placeholder="No division" />
+                      <SelectValue>
+                        {team.division_id
+                          ? divisions.find((d) => d.id === team.division_id)?.name || "No division"
+                          : "No division"}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">No division</SelectItem>
@@ -691,113 +946,6 @@ export function TeamsManager({
           );
         })}
       </div>
-
-      {/* Add player dialog — managers only */}
-      {canManage && <Dialog>
-        <DialogTrigger>
-          <Button variant="outline">
-            <UserPlus className="h-4 w-4 mr-2" />
-            Add Player
-          </Button>
-        </DialogTrigger>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add a Player</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 pt-2">
-            {playerError && (
-              <p className="text-sm text-destructive bg-destructive/10 px-3 py-2 rounded">
-                {playerError}
-              </p>
-            )}
-            <div className="space-y-2">
-              <Label>Name *</Label>
-              <Input
-                value={playerName}
-                onChange={(e) => setPlayerName(e.target.value)}
-                placeholder="Jane Smith"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Email</Label>
-              <Input
-                type="email"
-                value={playerEmail}
-                onChange={(e) => setPlayerEmail(e.target.value)}
-                placeholder="jane@example.com"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Phone</Label>
-              <Input
-                value={playerPhone}
-                onChange={(e) => setPlayerPhone(e.target.value)}
-                placeholder="+1 555-1234"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Team</Label>
-              <Select value={playerTeamId} onValueChange={(v) => v && setPlayerTeamId(v)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Sub pool (no team)" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Sub pool (no team)</SelectItem>
-                  {divisions.length > 0 ? (
-                    <>
-                      {divisions.map((div) => {
-                        const divTeams = teams.filter(
-                          (t) => t.division_id === div.id
-                        );
-                        if (divTeams.length === 0) return null;
-                        return (
-                          <div key={div.id}>
-                            <p className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                              {div.name}
-                            </p>
-                            {divTeams.map((t) => (
-                              <SelectItem key={t.id} value={t.id}>
-                                {t.name}
-                              </SelectItem>
-                            ))}
-                          </div>
-                        );
-                      })}
-                      {teams.filter((t) => !t.division_id).length > 0 && (
-                        <div>
-                          <p className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                            No division
-                          </p>
-                          {teams
-                            .filter((t) => !t.division_id)
-                            .map((t) => (
-                              <SelectItem key={t.id} value={t.id}>
-                                {t.name}
-                              </SelectItem>
-                            ))}
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    teams.map((t) => (
-                      <SelectItem key={t.id} value={t.id}>
-                        {t.name}
-                      </SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
-            </div>
-            <Button
-              onClick={addPlayer}
-              disabled={addingPlayer || !playerName.trim()}
-              className="w-full"
-            >
-              {addingPlayer ? "Adding..." : "Add Player"}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>}
 
       {/* Delete team confirmation dialog */}
       {deletingTeamId && (
@@ -835,6 +983,83 @@ export function TeamsManager({
                 <Button variant="destructive" onClick={confirmDeleteTeam}>
                   <Trash2 className="h-4 w-4 mr-1" />
                   Delete Team
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Team promotion dialog */}
+      {promotingTeamId && (
+        <Dialog open onOpenChange={(open) => { if (!open) { setPromotingTeamId(null); setPromotionDivisionId(""); } }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Change Division</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 pt-2">
+              <p className="text-sm text-muted-foreground">
+                Move{" "}
+                <span className="font-medium text-foreground">
+                  {teams.find((t) => t.id === promotingTeamId)?.name}
+                </span>{" "}
+                to a different division.
+              </p>
+              <div className="space-y-2">
+                <Label>New Division</Label>
+                <Select value={promotionDivisionId} onValueChange={(v) => v && setPromotionDivisionId(v)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select division" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No division</SelectItem>
+                    {divisions.map((d) => (
+                      <SelectItem key={d.id} value={d.id}>
+                        {d.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex gap-2 justify-end">
+                <Button variant="outline" onClick={() => { setPromotingTeamId(null); setPromotionDivisionId(""); }}>
+                  Cancel
+                </Button>
+                <Button onClick={confirmPromoteTeam} disabled={!promotionDivisionId}>
+                  <ArrowUpCircle className="h-4 w-4 mr-1" />
+                  Change Division
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Team drop out dialog */}
+      {droppingOutTeamId && (
+        <Dialog open onOpenChange={(open) => { if (!open) setDroppingOutTeamId(null); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Drop Out of Season</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 pt-2">
+              <p className="text-sm text-muted-foreground">
+                Are you sure{" "}
+                <span className="font-medium text-foreground">
+                  {teams.find((t) => t.id === droppingOutTeamId)?.name}
+                </span>{" "}
+                wants to drop out of the season?
+              </p>
+              <p className="text-sm text-muted-foreground">
+                The team will be removed and all players will be moved to the sub pool. This action cannot be undone.
+              </p>
+              <div className="flex gap-2 justify-end">
+                <Button variant="outline" onClick={() => setDroppingOutTeamId(null)}>
+                  Cancel
+                </Button>
+                <Button variant="destructive" onClick={confirmDropOutTeam}>
+                  <XCircle className="h-4 w-4 mr-1" />
+                  Drop Out
                 </Button>
               </div>
             </div>
