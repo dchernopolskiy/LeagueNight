@@ -39,6 +39,7 @@ import {
 import type { LeagueStaff } from "@/lib/types";
 import { useLeagueData } from "@/lib/hooks";
 import { PublicLinkCopy } from "@/components/dashboard/public-link-copy";
+import { QRCodeDialog } from "@/components/ui/qr-code";
 
 export default function LeagueOverviewPage() {
   const { leagueId } = useParams<{ leagueId: string }>();
@@ -1020,6 +1021,11 @@ export default function LeagueOverviewPage() {
                     /league/{league.slug}
                   </code>
                   <PublicLinkCopy slug={league.slug} />
+                  <QRCodeDialog
+                    url={`${typeof window !== 'undefined' ? window.location.origin : ''}/league/${league.slug}`}
+                    title={`${league.name} - League Page`}
+                    description="Scan to view public league page"
+                  />
                   <Button
                     variant="outline"
                     size="sm"

@@ -33,6 +33,7 @@ import type { Game, Team, GameDayPattern, League, Player, Location, LocationUnav
 import { useLeagueRole } from "@/lib/league-role-context";
 import { GameDaySetupPanel } from "@/components/dashboard/game-day-setup";
 import { useLeagueData, useLocations } from "@/lib/hooks";
+import { QRCodeDialog } from "@/components/ui/qr-code";
 
 
 export default function SchedulePage() {
@@ -366,10 +367,19 @@ export default function SchedulePage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">Schedule</CardTitle>
-              <Button variant="outline" size="sm" onClick={exportSchedulePdfFn}>
-                <Download className="h-4 w-4 mr-1" />
-                Export PDF
-              </Button>
+              <div className="flex gap-2">
+                {league?.is_public && (
+                  <QRCodeDialog
+                    url={`${typeof window !== 'undefined' ? window.location.origin : ''}/league/${league.slug}/schedule${activeDivisionId ? `?division=${activeDivisionId}` : ''}`}
+                    title={`${league.name} - Schedule`}
+                    description="Scan to view public schedule"
+                  />
+                )}
+                <Button variant="outline" size="sm" onClick={exportSchedulePdfFn}>
+                  <Download className="h-4 w-4 mr-1" />
+                  Export PDF
+                </Button>
+              </div>
             </div>
           </CardHeader>
           <CardContent>
