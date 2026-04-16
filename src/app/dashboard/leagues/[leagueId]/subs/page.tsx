@@ -140,7 +140,8 @@ export default function SubsPage() {
     }
   }
 
-  async function handleAddToTeam(teamId: string) {
+  async function handleAddToTeam(teamId: string | null) {
+    if (!teamId) return;
     if (!selectedSub) return;
 
     const supabase = createClient();
@@ -225,10 +226,13 @@ export default function SubsPage() {
                     )}
                   </div>
                   <DropdownMenu>
-                    <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                      <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
-                        <MoreVertical className="h-4 w-4" />
-                      </Button>
+                    <DropdownMenuTrigger
+                      onClick={(e) => e.stopPropagation()}
+                      render={
+                        <Button variant="ghost" size="sm" className="h-8 w-8 p-0" />
+                      }
+                    >
+                      <MoreVertical className="h-4 w-4" />
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem
