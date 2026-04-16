@@ -26,10 +26,11 @@ import {
   MapPin,
   CalendarX2,
   ArrowRight,
+  Trophy,
 } from "lucide-react";
 import { format } from "date-fns";
 import { generateSchedulePdf } from "@/lib/export/schedule-pdf";
-import type { Game, Location, LocationUnavailability } from "@/lib/types";
+import type { Game, LeagueSettings, Location, LocationUnavailability } from "@/lib/types";
 import { useLeagueRole } from "@/lib/league-role-context";
 import { GameDaySetupPanel } from "@/components/dashboard/game-day-setup";
 import { useLeagueData } from "@/lib/hooks";
@@ -125,6 +126,10 @@ export default function SchedulePage() {
   const [editGameVenue, setEditGameVenue] = useState("");
   const [editHome, setEditHome] = useState("");
   const [editAway, setEditAway] = useState("");
+  const [scoringGameId, setScoringGameId] = useState<string | null>(null);
+  const [homeScore, setHomeScore] = useState("");
+  const [awayScore, setAwayScore] = useState("");
+  const [setScores, setSetScores] = useState<{ home: string; away: string }[]>([]);
 
   // Conflict resolution
   const [conflictMoveTargets, setConflictMoveTargets] = useState<Record<string, string>>({});
@@ -188,6 +193,7 @@ export default function SchedulePage() {
 
   function startEditGame(game: Game) {
     const dt = new Date(game.scheduled_at);
+    resetScoreEditor();
     setEditingGameId(game.id);
     setEditDate(format(dt, "yyyy-MM-dd"));
     setEditTime(format(dt, "HH:mm"));
@@ -213,6 +219,76 @@ export default function SchedulePage() {
     if (!error) {
       await refetchLeague();
       setEditingGameId(null);
+    }
+  }
+
+  const leagueSettings = (league?.settings || {}) as LeagueSettings;
+  const scoringMode = leagueSettings.scoring_mode || "game";
+  const setsToWin = leagueSettings.sets_to_win || 2;
+  const maxSets = setsToWin * 2 - 1;
+
+  function startScoreGame(game: Game) {
+    setEditingGameId(null);
+    setScoringGameId(game.id);
+    setHomeScore(game.home_score?.toString() || "");
+    setAwayScore(game.away_score?.toString() || "");
+    setSetScores(Array.from({ length: maxSets }, () => ({ home: "", away: "" })));
+  }
+
+  function resetScoreEditor() {
+    setScoringGameId(null);
+    setHomeScore("");
+    setAwayScore("");
+    setSetScores([]);
+  }
+
+  async function saveScoreGame(gameId: string) {
+    let nextHomeScore: number;
+    let nextAwayScore: number;
+
+    if (scoringMode === "sets") {
+      let homeWins = 0;
+      let awayWins = 0;
+
+      for (const set of setScores) {
+        if (!set.home || !set.away) continue;
+        const home = parseInt(set.home, 10);
+        const away = parseInt(set.away, 10);
+        if (Number.isNaN(home) || Number.isNaN(away)) continue;
+        if (home > away) homeWins++;
+        else if (away > home) awayWins++;
+      }
+
+      if (homeWins < setsToWin && awayWins < setsToWin) {
+        alert(`A team needs ${setsToWin} set wins to complete this game.`);
+        return;
+      }
+
+      nextHomeScore = homeWins;
+      nextAwayScore = awayWins;
+    } else {
+      nextHomeScore = parseInt(homeScore, 10);
+      nextAwayScore = parseInt(awayScore, 10);
+
+      if (Number.isNaN(nextHomeScore) || Number.isNaN(nextAwayScore)) {
+        return;
+      }
+    }
+
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("games")
+      .update({
+        home_score: nextHomeScore,
+        away_score: nextAwayScore,
+        status: "completed",
+      })
+      .eq("id", gameId);
+
+    if (!error) {
+      await supabase.rpc("recalculate_standings", { p_league_id: leagueId });
+      await refetchLeague();
+      resetScoreEditor();
     }
   }
 
@@ -446,6 +522,7 @@ export default function SchedulePage() {
                             <div className="px-3 py-1">
                               {group.games.map((game) => {
                                 const isEditing = editingGameId === game.id;
+                                const isScoring = scoringGameId === game.id;
 
                                 if (isEditing) {
                                   return (
@@ -455,7 +532,9 @@ export default function SchedulePage() {
                                           <Label className="text-xs">Home</Label>
                                           <Select value={editHome} onValueChange={(v) => v && setEditHome(v)}>
                                             <SelectTrigger className="h-8 text-xs">
-                                              <SelectValue placeholder="Select team" />
+                                              <SelectValue placeholder="Select team">
+                                                {teamsMap.get(editHome)?.name || "Select team"}
+                                              </SelectValue>
                                             </SelectTrigger>
                                             <SelectContent>
                                               {teams.map((t) => (
@@ -470,7 +549,9 @@ export default function SchedulePage() {
                                           <Label className="text-xs">Away</Label>
                                           <Select value={editAway} onValueChange={(v) => v && setEditAway(v)}>
                                             <SelectTrigger className="h-8 text-xs">
-                                              <SelectValue placeholder="Select team" />
+                                              <SelectValue placeholder="Select team">
+                                                {teamsMap.get(editAway)?.name || "Select team"}
+                                              </SelectValue>
                                             </SelectTrigger>
                                             <SelectContent>
                                               {teams.map((t) => (
@@ -524,6 +605,101 @@ export default function SchedulePage() {
                                   );
                                 }
 
+                                if (isScoring) {
+                                  return (
+                                    <div key={game.id} className="border rounded-lg p-3 my-2 space-y-3 bg-muted/30">
+                                      <div>
+                                        <p className="text-sm font-medium">
+                                          {teamsMap.get(game.home_team_id)?.name} vs {teamsMap.get(game.away_team_id)?.name}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground">
+                                          {format(new Date(game.scheduled_at), "EEE, MMM d 'at' h:mm a")}
+                                          {game.court && ` (${game.court})`}
+                                        </p>
+                                      </div>
+                                      {scoringMode === "sets" ? (
+                                        <div className="grid gap-2">
+                                          {setScores.map((setScore, index) => (
+                                            <div key={`${game.id}-set-${index}`} className="grid grid-cols-3 gap-2 items-end">
+                                              <div>
+                                                <Label className="text-xs">Set {index + 1} Home</Label>
+                                                <Input
+                                                  type="number"
+                                                  min="0"
+                                                  value={setScore.home}
+                                                  onChange={(e) =>
+                                                    setSetScores((prev) =>
+                                                      prev.map((entry, entryIndex) =>
+                                                        entryIndex === index
+                                                          ? { ...entry, home: e.target.value }
+                                                          : entry
+                                                      )
+                                                    )
+                                                  }
+                                                  className="h-8 text-xs"
+                                                />
+                                              </div>
+                                              <div>
+                                                <Label className="text-xs">Set {index + 1} Away</Label>
+                                                <Input
+                                                  type="number"
+                                                  min="0"
+                                                  value={setScore.away}
+                                                  onChange={(e) =>
+                                                    setSetScores((prev) =>
+                                                      prev.map((entry, entryIndex) =>
+                                                        entryIndex === index
+                                                          ? { ...entry, away: e.target.value }
+                                                          : entry
+                                                      )
+                                                    )
+                                                  }
+                                                  className="h-8 text-xs"
+                                                />
+                                              </div>
+                                              <div className="text-[11px] text-muted-foreground pb-2">
+                                                First to {setsToWin} sets
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <div className="grid grid-cols-2 gap-2">
+                                          <div>
+                                            <Label className="text-xs">Home score</Label>
+                                            <Input
+                                              type="number"
+                                              min="0"
+                                              value={homeScore}
+                                              onChange={(e) => setHomeScore(e.target.value)}
+                                              className="h-8 text-xs"
+                                            />
+                                          </div>
+                                          <div>
+                                            <Label className="text-xs">Away score</Label>
+                                            <Input
+                                              type="number"
+                                              min="0"
+                                              value={awayScore}
+                                              onChange={(e) => setAwayScore(e.target.value)}
+                                              className="h-8 text-xs"
+                                            />
+                                          </div>
+                                        </div>
+                                      )}
+                                      <div className="flex justify-end gap-2">
+                                        <Button variant="ghost" size="sm" onClick={resetScoreEditor}>
+                                          Cancel
+                                        </Button>
+                                        <Button size="sm" onClick={() => saveScoreGame(game.id)}>
+                                          <Check className="h-3 w-3 mr-1" />
+                                          Save Score
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  );
+                                }
+
                                 return (
                                   <div key={game.id} className="flex items-center justify-between py-2 border-b last:border-0">
                                     <div className="flex-1">
@@ -564,6 +740,14 @@ export default function SchedulePage() {
                                             onClick={() => startEditGame(game)}
                                           >
                                             <Pencil className="h-3 w-3" />
+                                          </Button>
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="h-6 w-6 p-0 text-muted-foreground"
+                                            onClick={() => startScoreGame(game)}
+                                          >
+                                            <Trophy className="h-3 w-3" />
                                           </Button>
                                           <Button
                                             variant="ghost"
