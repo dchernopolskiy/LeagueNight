@@ -1,4 +1,4 @@
-import type { PreferenceApplied } from "@/lib/types";
+import type { PreferenceApplied, Team } from "@/lib/types";
 
 export interface Matchup {
   home: string;
@@ -210,7 +210,7 @@ export function assignDatesWithPreferences(
     durationMinutes: number;
     skipDates?: string[];
   },
-  teamsMap: Map<string, any>, // Team with preferences
+  teamsMap: Map<string, Pick<Team, "id" | "name" | "preferences">>,
   gamesPerTeamPerDay: number = 1
 ): {
   home: string;
@@ -293,7 +293,6 @@ export function assignDatesWithPreferences(
     let slotIndex = 0;
 
     while (true) {
-      const courtNum = slotIndex % courtCount;
       const timeSlotOffset = Math.floor(slotIndex / courtCount) * durationMinutes;
 
       // Check if slot exceeds end_time
@@ -313,164 +312,179 @@ export function assignDatesWithPreferences(
 
     // Categorize slots as early/late
     const midpoint = Math.floor(availableSlots.length / 2);
+    const slotMeta = availableSlots.map((slot, slotIdx) => ({
+      slot,
+      slotIdx,
+      timeKey: slot.time.toISOString(),
+      isEarly: slotIdx < midpoint || availableSlots.length === 1,
+      isLate: slotIdx >= midpoint,
+    }));
 
-    // Score each matchup against each slot
-    type ScoredAssignment = {
-      matchupIdx: number;
+    type SlotCandidate = {
       slotIdx: number;
       score: number;
       applied: PreferenceApplied;
       notes: string[];
     };
+    type MatchupCandidateSet = {
+      matchupIdx: number;
+      candidates: SlotCandidate[];
+      bestScore: number;
+    };
 
-    const scoredAssignments: ScoredAssignment[] = [];
+    function scoreTeamPreference(
+      team: Pick<Team, "name" | "preferences">,
+      slotDate: Date,
+      isEarly: boolean,
+      isLate: boolean,
+      side: "home_team" | "away_team",
+      applied: PreferenceApplied,
+      notes: string[]
+    ): number {
+      const pref = team.preferences;
+      if (!pref) return 0;
 
-    for (let m = 0; m < dayMatchups.length; m++) {
-      const matchup = dayMatchups[m];
+      const slotDateYMD = formatDateYMD(slotDate);
+      if (pref.bye_dates?.includes(slotDateYMD)) {
+        notes.push(`${team.name} has bye on this date`);
+        return -100;
+      }
+
+      if (pref.week_preferences && pref.week_preferences[weekNum]) {
+        const weekPref = pref.week_preferences[weekNum];
+        if (weekPref === "early" && isEarly) {
+          applied[side] = applied[side] || [];
+          applied[side].push("week_specific_time");
+          return 15;
+        }
+        if (weekPref === "late" && isLate) {
+          applied[side] = applied[side] || [];
+          applied[side].push("week_specific_time");
+          return 15;
+        }
+        return -10;
+      }
+
+      if (pref.preferred_time === "early") {
+        if (isEarly) {
+          applied[side] = applied[side] || [];
+          applied[side].push("preferred_time");
+          return 8;
+        }
+        return -3;
+      }
+
+      if (pref.preferred_time === "late") {
+        if (isLate) {
+          applied[side] = applied[side] || [];
+          applied[side].push("preferred_time");
+          return 8;
+        }
+        return -3;
+      }
+
+      return 0;
+    }
+
+    const matchupCandidates: MatchupCandidateSet[] = [];
+
+    for (let matchupIdx = 0; matchupIdx < dayMatchups.length; matchupIdx++) {
+      const matchup = dayMatchups[matchupIdx];
       const homeTeam = teamsMap.get(matchup.home);
       const awayTeam = teamsMap.get(matchup.away);
 
       if (!homeTeam || !awayTeam) continue;
 
-      for (let s = 0; s < availableSlots.length; s++) {
-        const slot = availableSlots[s];
-        const isEarly = s < midpoint || availableSlots.length === 1;
-        const isLate = s >= midpoint;
+      const candidates: SlotCandidate[] = [];
 
-        let score = 0;
+      for (const meta of slotMeta) {
         const applied: PreferenceApplied = {};
         const notes: string[] = [];
+        let score = 0;
 
-        // Check home team preferences
-        const homePref = homeTeam.preferences;
-        if (homePref) {
-          // Bye dates (block this slot)
-          if (homePref.bye_dates?.includes(formatDateYMD(slot.time))) {
-            score -= 100;
-            notes.push(`${homeTeam.name} has bye on this date`);
-          } else {
-            // Week-specific time preference (highest priority)
-            if (homePref.week_preferences && homePref.week_preferences[weekNum]) {
-              const weekPref = homePref.week_preferences[weekNum];
-              if (weekPref === "early" && isEarly) {
-                score += 15;
-                applied.home_team = applied.home_team || [];
-                applied.home_team.push("week_specific_time");
-              } else if (weekPref === "late" && isLate) {
-                score += 15;
-                applied.home_team = applied.home_team || [];
-                applied.home_team.push("week_specific_time");
-              } else {
-                score -= 10;
-              }
-            }
-            // General time preference
-            else if (homePref.preferred_time) {
-              if (homePref.preferred_time === "early" && isEarly) {
-                score += 8;
-                applied.home_team = applied.home_team || [];
-                applied.home_team.push("preferred_time");
-              } else if (homePref.preferred_time === "late" && isLate) {
-                score += 8;
-                applied.home_team = applied.home_team || [];
-                applied.home_team.push("preferred_time");
-              } else {
-                score -= 3;
-              }
-            }
-          }
-        }
+        score += scoreTeamPreference(
+          homeTeam,
+          meta.slot.time,
+          meta.isEarly,
+          meta.isLate,
+          "home_team",
+          applied,
+          notes
+        );
+        score += scoreTeamPreference(
+          awayTeam,
+          meta.slot.time,
+          meta.isEarly,
+          meta.isLate,
+          "away_team",
+          applied,
+          notes
+        );
 
-        // Check away team preferences
-        const awayPref = awayTeam.preferences;
-        if (awayPref) {
-          // Bye dates
-          if (awayPref.bye_dates?.includes(formatDateYMD(slot.time))) {
-            score -= 100;
-            notes.push(`${awayTeam.name} has bye on this date`);
-          } else {
-            // Week-specific time preference
-            if (awayPref.week_preferences && awayPref.week_preferences[weekNum]) {
-              const weekPref = awayPref.week_preferences[weekNum];
-              if (weekPref === "early" && isEarly) {
-                score += 15;
-                applied.away_team = applied.away_team || [];
-                applied.away_team.push("week_specific_time");
-              } else if (weekPref === "late" && isLate) {
-                score += 15;
-                applied.away_team = applied.away_team || [];
-                applied.away_team.push("week_specific_time");
-              } else {
-                score -= 10;
-              }
-            }
-            // General time preference
-            else if (awayPref.preferred_time) {
-              if (awayPref.preferred_time === "early" && isEarly) {
-                score += 8;
-                applied.away_team = applied.away_team || [];
-                applied.away_team.push("preferred_time");
-              } else if (awayPref.preferred_time === "late" && isLate) {
-                score += 8;
-                applied.away_team = applied.away_team || [];
-                applied.away_team.push("preferred_time");
-              } else {
-                score -= 3;
-              }
-            }
-          }
-        }
-
-        // Only consider valid assignments (no bye conflicts)
         if (score >= -50) {
-          scoredAssignments.push({ matchupIdx: m, slotIdx: s, score, applied, notes });
+          candidates.push({
+            slotIdx: meta.slotIdx,
+            score,
+            applied,
+            notes,
+          });
         }
       }
+
+      candidates.sort((a, b) => b.score - a.score);
+      matchupCandidates.push({
+        matchupIdx,
+        candidates,
+        bestScore: candidates[0]?.score ?? Number.NEGATIVE_INFINITY,
+      });
     }
 
-    // Sort by score (greedy assignment)
-    scoredAssignments.sort((a, b) => b.score - a.score);
+    matchupCandidates.sort((a, b) => {
+      if (a.candidates.length !== b.candidates.length) {
+        return a.candidates.length - b.candidates.length;
+      }
+      return b.bestScore - a.bestScore;
+    });
 
     const assignedMatchups = new Set<number>();
     const usedSlots = new Set<number>();
     // Track which teams are playing at which time (to prevent double-booking)
     const teamsAtTime = new Map<string, Set<string>>(); // time -> set of team IDs
 
-    // Greedy assignment
-    for (const assignment of scoredAssignments) {
-      if (assignedMatchups.has(assignment.matchupIdx)) continue;
-      if (usedSlots.has(assignment.slotIdx)) continue;
+    // Greedy assignment, but operate matchup-by-matchup rather than sorting one
+    // giant cross-product list of every matchup/slot combination.
+    for (const candidateSet of matchupCandidates) {
+      const matchup = dayMatchups[candidateSet.matchupIdx];
 
-      const matchup = dayMatchups[assignment.matchupIdx];
-      const slot = availableSlots[assignment.slotIdx];
-      const timeKey = slot.time.toISOString();
+      for (const candidate of candidateSet.candidates) {
+        if (usedSlots.has(candidate.slotIdx)) continue;
 
-      // Check if either team is already playing at this time
-      const teamsAtThisTime = teamsAtTime.get(timeKey) || new Set<string>();
-      if (teamsAtThisTime.has(matchup.home) || teamsAtThisTime.has(matchup.away)) {
-        continue; // Skip this assignment - team conflict
+        const slot = availableSlots[candidate.slotIdx];
+        const timeKey = slot.time.toISOString();
+        const teamsAtThisTime = teamsAtTime.get(timeKey) || new Set<string>();
+        if (teamsAtThisTime.has(matchup.home) || teamsAtThisTime.has(matchup.away)) {
+          continue;
+        }
+
+        const courtNum = slot.slotIndex % courtCount;
+        result.push({
+          home: matchup.home,
+          away: matchup.away,
+          scheduledAt: slot.time,
+          venue,
+          court: courtCount > 1 ? `Court ${courtNum + 1}` : null,
+          weekNumber: weekNum,
+          preferenceApplied: Object.keys(candidate.applied).length > 0 ? candidate.applied : null,
+          schedulingNotes: candidate.notes.length > 0 ? candidate.notes.join("; ") : null,
+        });
+
+        assignedMatchups.add(candidateSet.matchupIdx);
+        usedSlots.add(candidate.slotIdx);
+        teamsAtThisTime.add(matchup.home);
+        teamsAtThisTime.add(matchup.away);
+        teamsAtTime.set(timeKey, teamsAtThisTime);
+        break;
       }
-
-      const courtNum = slot.slotIndex % courtCount;
-
-      result.push({
-        home: matchup.home,
-        away: matchup.away,
-        scheduledAt: slot.time,
-        venue,
-        court: courtCount > 1 ? `Court ${courtNum + 1}` : null,
-        weekNumber: weekNum,
-        preferenceApplied: Object.keys(assignment.applied).length > 0 ? assignment.applied : null,
-        schedulingNotes: assignment.notes.length > 0 ? assignment.notes.join("; ") : null,
-      });
-
-      assignedMatchups.add(assignment.matchupIdx);
-      usedSlots.add(assignment.slotIdx);
-
-      // Mark both teams as busy at this time
-      teamsAtThisTime.add(matchup.home);
-      teamsAtThisTime.add(matchup.away);
-      teamsAtTime.set(timeKey, teamsAtThisTime);
     }
 
     // Fallback for unassigned matchups
