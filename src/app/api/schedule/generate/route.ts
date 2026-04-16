@@ -176,21 +176,28 @@ export async function POST(request: NextRequest) {
   }
   const mergedSkipDates = Array.from(new Set([...skipDates, ...fullyUnavailDates]));
 
-  // If regenerating, fetch completed games to avoid duplicate matchups
-  let completedMatchups = new Set<string>();
+  // Helper to parse local date strings (append T00:00:00 to force local-time parsing)
+  const parseLocalDate = (s: string) => new Date(s.includes("T") ? s : `${s}T00:00:00`);
+
+  // If regenerating, fetch games before the regeneration date to avoid duplicate matchups
+  let existingMatchups = new Set<string>();
   if (regenerateFrom) {
-    const { data: completedGames } = await supabase
+    // Parse the regeneration date and convert to UTC ISO for comparison
+    const regenerationDate = localToUTCISO(parseLocalDate(regenerateFrom), timezone);
+
+    // Get all games (scheduled or completed) before the regeneration date
+    const { data: existingGames } = await supabase
       .from("games")
       .select("home_team_id, away_team_id")
       .eq("league_id", leagueId)
-      .eq("status", "completed")
-      .eq("is_playoff", false);
+      .eq("is_playoff", false)
+      .lt("scheduled_at", regenerationDate);
 
-    if (completedGames) {
-      for (const game of completedGames) {
+    if (existingGames) {
+      for (const game of existingGames) {
         // Store both directions of the matchup (A-B and B-A are the same matchup)
         const [teamA, teamB] = [game.home_team_id, game.away_team_id].sort();
-        completedMatchups.add(`${teamA}-${teamB}`);
+        existingMatchups.add(`${teamA}-${teamB}`);
       }
     }
   }
@@ -284,23 +291,19 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Filter out matchups that already happened (when regenerating)
-  let skippedCompletedMatchups = 0;
-  if (regenerateFrom && completedMatchups.size > 0) {
+  // Filter out matchups that already happened before the regeneration date
+  let skippedExistingMatchups = 0;
+  if (regenerateFrom && existingMatchups.size > 0) {
     const originalCount = allMatchups.length;
     allMatchups = allMatchups.filter((matchup) => {
       const [teamA, teamB] = [matchup.home, matchup.away].sort();
       const matchupKey = `${teamA}-${teamB}`;
-      return !completedMatchups.has(matchupKey);
+      return !existingMatchups.has(matchupKey);
     });
-    skippedCompletedMatchups = originalCount - allMatchups.length;
+    skippedExistingMatchups = originalCount - allMatchups.length;
   }
 
   // Assign dates — use total courts across all selected locations
-  // Append T00:00:00 to force local-time parsing (date-only strings like
-  // "2026-04-06" are parsed as UTC midnight, which shifts the day backward
-  // in western timezones and breaks day-of-week calculations).
-  const parseLocalDate = (s: string) => new Date(s.includes("T") ? s : `${s}T00:00:00`);
   const effectiveStartsOn = regenerateFrom ? parseLocalDate(regenerateFrom) : parseLocalDate(pattern.starts_on);
   const totalCourts = effectiveLocationIds.length > 0
     ? locationsData.reduce((sum, l) => sum + l.court_count, 0)
@@ -333,10 +336,10 @@ export async function POST(request: NextRequest) {
   // Check if we scheduled all matchups (capacity warning)
   const schedulingWarnings: string[] = [];
 
-  // Add info about skipped completed matchups when regenerating
-  if (skippedCompletedMatchups > 0) {
+  // Add info about skipped matchups from before regeneration date
+  if (skippedExistingMatchups > 0) {
     schedulingWarnings.push(
-      `Skipped ${skippedCompletedMatchups} matchup${skippedCompletedMatchups > 1 ? 's' : ''} that already completed.`
+      `Skipped ${skippedExistingMatchups} matchup${skippedExistingMatchups > 1 ? 's' : ''} that already occurred before the regeneration date.`
     );
   }
 
