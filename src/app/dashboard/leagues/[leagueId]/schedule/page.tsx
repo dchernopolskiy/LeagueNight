@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -29,10 +29,10 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import { generateSchedulePdf } from "@/lib/export/schedule-pdf";
-import type { Game, Team, GameDayPattern, League, Player, Location, LocationUnavailability } from "@/lib/types";
+import type { Game, Location, LocationUnavailability } from "@/lib/types";
 import { useLeagueRole } from "@/lib/league-role-context";
 import { GameDaySetupPanel } from "@/components/dashboard/game-day-setup";
-import { useLeagueData, useLocations } from "@/lib/hooks";
+import { useLeagueData } from "@/lib/hooks";
 import { PreferenceIndicator } from "@/components/dashboard/preference-indicator";
 
 
@@ -61,18 +61,13 @@ export default function SchedulePage() {
 
   const [generating, setGenerating] = useState(false);
   const [schedulingWarnings, setSchedulingWarnings] = useState<string[]>([]);
-  const router = useRouter();
 
   // Fetch locations separately (organizer-scoped, not league-scoped)
   const [locations, setLocations] = useState<Location[]>([]);
   const [locationUnavail, setLocationUnavail] = useState<LocationUnavailability[]>([]);
   const [locationsLoading, setLocationsLoading] = useState(true);
 
-  useEffect(() => {
-    loadLocations();
-  }, [leagueId]);
-
-  async function loadLocations() {
+  const fetchLocationsData = useCallback(async () => {
     const supabase = createClient();
     const { data: locationsRes } = await supabase
       .from("locations")
@@ -80,7 +75,7 @@ export default function SchedulePage() {
       .order("name");
 
     const locs = (locationsRes || []) as Location[];
-    setLocations(locs);
+    let unavail = [] as LocationUnavailability[];
 
     if (locs.length > 0) {
       const { data: unavailData } = await supabase
@@ -88,10 +83,38 @@ export default function SchedulePage() {
         .select("*")
         .in("location_id", locs.map((l) => l.id))
         .order("unavailable_date");
-      setLocationUnavail((unavailData || []) as LocationUnavailability[]);
+      unavail = (unavailData || []) as LocationUnavailability[];
     }
+
+    return { locs, unavail };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function syncLocations() {
+      setLocationsLoading(true);
+      const { locs, unavail } = await fetchLocationsData();
+      if (cancelled) return;
+      setLocations(locs);
+      setLocationUnavail(unavail);
+      setLocationsLoading(false);
+    }
+
+    void syncLocations();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [leagueId, fetchLocationsData]);
+
+  const loadLocations = useCallback(async () => {
+    setLocationsLoading(true);
+    const { locs, unavail } = await fetchLocationsData();
+    setLocations(locs);
+    setLocationUnavail(unavail);
     setLocationsLoading(false);
-  }
+  }, [fetchLocationsData]);
 
   const loading = leagueLoading || locationsLoading;
 
@@ -218,7 +241,6 @@ export default function SchedulePage() {
   }
 
   function getSuggestedLocation(game: Game): Location | null {
-    const gameDate = format(new Date(game.scheduled_at), "yyyy-MM-dd");
     const currentLoc = game.location_id ? locationsMap.get(game.location_id) : null;
     const currentTags = currentLoc?.tags || [];
     const available = getAvailableLocationsForGame(game);
@@ -395,148 +417,174 @@ export default function SchedulePage() {
                       </div>
                     );
                   })()}
-                  <div className="space-y-2">
-                    {weekGames.map((game) => {
-                      const isEditing = editingGameId === game.id;
-
-                      if (isEditing) {
-                        return (
-                          <div key={game.id} className="border rounded-lg p-3 space-y-3 bg-muted/30">
-                            <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                <Label className="text-xs">Home</Label>
-                                <Select value={editHome} onValueChange={(v) => v && setEditHome(v)}>
-                                  <SelectTrigger className="h-8 text-xs">
-                                    <SelectValue placeholder="Select team" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {teams.map((t) => (
-                                      <SelectItem key={t.id} value={t.id}>
-                                        {t.name}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                              <div>
-                                <Label className="text-xs">Away</Label>
-                                <Select value={editAway} onValueChange={(v) => v && setEditAway(v)}>
-                                  <SelectTrigger className="h-8 text-xs">
-                                    <SelectValue placeholder="Select team" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {teams.map((t) => (
-                                      <SelectItem key={t.id} value={t.id}>
-                                        {t.name}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                            </div>
-                            <div className="grid grid-cols-3 gap-2">
-                              <div>
-                                <Label className="text-xs">Date</Label>
-                                <Input
-                                  type="date"
-                                  value={editDate}
-                                  onChange={(e) => setEditDate(e.target.value)}
-                                  className="h-8 text-xs"
-                                />
-                              </div>
-                              <div>
-                                <Label className="text-xs">Time</Label>
-                                <Input
-                                  type="time"
-                                  value={editTime}
-                                  onChange={(e) => setEditTime(e.target.value)}
-                                  className="h-8 text-xs"
-                                />
-                              </div>
-                              <div>
-                                <Label className="text-xs">Venue</Label>
-                                <Input
-                                  value={editGameVenue}
-                                  onChange={(e) => setEditGameVenue(e.target.value)}
-                                  className="h-8 text-xs"
-                                  placeholder="Venue"
-                                />
-                              </div>
-                            </div>
-                            <div className="flex justify-end gap-2">
-                              <Button variant="ghost" size="sm" onClick={() => setEditingGameId(null)}>
-                                Cancel
-                              </Button>
-                              <Button size="sm" onClick={saveEditGame}>
-                                <Check className="h-3 w-3 mr-1" />
-                                Save
-                              </Button>
-                            </div>
-                          </div>
-                        );
+                  {(() => {
+                    const venueGroups = new Map<string, { label: string; games: Game[] }>();
+                    for (const game of weekGames) {
+                      const locationName = game.location_id
+                        ? locationsMap.get(game.location_id)?.name
+                        : null;
+                      const label = locationName || game.venue || "Unassigned venue";
+                      const groupKey = game.location_id || game.venue || "unassigned";
+                      const existing = venueGroups.get(groupKey);
+                      if (existing) {
+                        existing.games.push(game);
+                      } else {
+                        venueGroups.set(groupKey, { label, games: [game] });
                       }
+                    }
 
-                      return (
-                        <div key={game.id} className="flex items-center justify-between py-2 border-b last:border-0">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium">
-                                {teamsMap.get(game.home_team_id)?.name} vs {teamsMap.get(game.away_team_id)?.name}
-                              </span>
-                              <PreferenceIndicator
-                                preferenceApplied={game.preference_applied}
-                                homeTeamName={teamsMap.get(game.home_team_id)?.name}
-                                awayTeamName={teamsMap.get(game.away_team_id)?.name}
-                                variant="badge"
-                              />
+                    return (
+                      <div className="space-y-4">
+                        {[...venueGroups.values()].map((group) => (
+                          <div key={group.label} className="rounded-lg border bg-muted/10">
+                            <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/30">
+                              <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
+                              <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                {group.label}
+                              </h4>
                             </div>
-                            <p className="text-xs text-muted-foreground">
-                              {format(new Date(game.scheduled_at), "EEE, MMM d 'at' h:mm a")}
-                              {game.location_id && locationsMap.get(game.location_id)?.name
-                                ? ` — ${locationsMap.get(game.location_id)!.name}`
-                                : game.venue
-                                  ? ` — ${game.venue}`
-                                  : ""}
-                              {game.court && ` (${game.court})`}
-                            </p>
-                            {game.scheduling_notes && (
-                              <p className="text-xs text-blue-600 italic mt-1">
-                                {game.scheduling_notes}
-                              </p>
-                            )}
+                            <div className="px-3 py-1">
+                              {group.games.map((game) => {
+                                const isEditing = editingGameId === game.id;
+
+                                if (isEditing) {
+                                  return (
+                                    <div key={game.id} className="border rounded-lg p-3 my-2 space-y-3 bg-muted/30">
+                                      <div className="grid grid-cols-2 gap-2">
+                                        <div>
+                                          <Label className="text-xs">Home</Label>
+                                          <Select value={editHome} onValueChange={(v) => v && setEditHome(v)}>
+                                            <SelectTrigger className="h-8 text-xs">
+                                              <SelectValue placeholder="Select team" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                              {teams.map((t) => (
+                                                <SelectItem key={t.id} value={t.id}>
+                                                  {t.name}
+                                                </SelectItem>
+                                              ))}
+                                            </SelectContent>
+                                          </Select>
+                                        </div>
+                                        <div>
+                                          <Label className="text-xs">Away</Label>
+                                          <Select value={editAway} onValueChange={(v) => v && setEditAway(v)}>
+                                            <SelectTrigger className="h-8 text-xs">
+                                              <SelectValue placeholder="Select team" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                              {teams.map((t) => (
+                                                <SelectItem key={t.id} value={t.id}>
+                                                  {t.name}
+                                                </SelectItem>
+                                              ))}
+                                            </SelectContent>
+                                          </Select>
+                                        </div>
+                                      </div>
+                                      <div className="grid grid-cols-3 gap-2">
+                                        <div>
+                                          <Label className="text-xs">Date</Label>
+                                          <Input
+                                            type="date"
+                                            value={editDate}
+                                            onChange={(e) => setEditDate(e.target.value)}
+                                            className="h-8 text-xs"
+                                          />
+                                        </div>
+                                        <div>
+                                          <Label className="text-xs">Time</Label>
+                                          <Input
+                                            type="time"
+                                            value={editTime}
+                                            onChange={(e) => setEditTime(e.target.value)}
+                                            className="h-8 text-xs"
+                                          />
+                                        </div>
+                                        <div>
+                                          <Label className="text-xs">Venue</Label>
+                                          <Input
+                                            value={editGameVenue}
+                                            onChange={(e) => setEditGameVenue(e.target.value)}
+                                            className="h-8 text-xs"
+                                            placeholder="Venue"
+                                          />
+                                        </div>
+                                      </div>
+                                      <div className="flex justify-end gap-2">
+                                        <Button variant="ghost" size="sm" onClick={() => setEditingGameId(null)}>
+                                          Cancel
+                                        </Button>
+                                        <Button size="sm" onClick={saveEditGame}>
+                                          <Check className="h-3 w-3 mr-1" />
+                                          Save
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  );
+                                }
+
+                                return (
+                                  <div key={game.id} className="flex items-center justify-between py-2 border-b last:border-0">
+                                    <div className="flex-1">
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-sm font-medium">
+                                          {teamsMap.get(game.home_team_id)?.name} vs {teamsMap.get(game.away_team_id)?.name}
+                                        </span>
+                                        <PreferenceIndicator
+                                          preferenceApplied={game.preference_applied}
+                                          homeTeamName={teamsMap.get(game.home_team_id)?.name}
+                                          awayTeamName={teamsMap.get(game.away_team_id)?.name}
+                                          variant="badge"
+                                        />
+                                      </div>
+                                      <p className="text-xs text-muted-foreground">
+                                        {format(new Date(game.scheduled_at), "EEE, MMM d 'at' h:mm a")}
+                                        {game.court && ` (${game.court})`}
+                                      </p>
+                                      {game.scheduling_notes && (
+                                        <p className="text-xs text-blue-600 italic mt-1">
+                                          {game.scheduling_notes}
+                                        </p>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      {game.status === "cancelled" ? (
+                                        <Badge variant="destructive">Cancelled</Badge>
+                                      ) : game.status === "completed" ? (
+                                        <Badge>
+                                          {game.home_score} - {game.away_score}
+                                        </Badge>
+                                      ) : canManage ? (
+                                        <>
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="h-6 w-6 p-0 text-muted-foreground"
+                                            onClick={() => startEditGame(game)}
+                                          >
+                                            <Pencil className="h-3 w-3" />
+                                          </Button>
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="h-6 w-6 p-0 text-muted-foreground"
+                                            onClick={() => cancelGame(game.id)}
+                                          >
+                                            <X className="h-3 w-3" />
+                                          </Button>
+                                        </>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
                           </div>
-                          <div className="flex items-center gap-1">
-                            {game.status === "cancelled" ? (
-                              <Badge variant="destructive">Cancelled</Badge>
-                            ) : game.status === "completed" ? (
-                              <Badge>
-                                {game.home_score} - {game.away_score}
-                              </Badge>
-                            ) : canManage ? (
-                              <>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-6 w-6 p-0 text-muted-foreground"
-                                  onClick={() => startEditGame(game)}
-                                >
-                                  <Pencil className="h-3 w-3" />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-6 w-6 p-0 text-muted-foreground"
-                                  onClick={() => cancelGame(game.id)}
-                                >
-                                  <X className="h-3 w-3" />
-                                </Button>
-                              </>
-                            ) : null}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </div>
               ))}
           </CardContent>
