@@ -53,7 +53,7 @@ export default function SubsPage() {
     name: "",
     email: "",
     phone: "",
-    notification_pref: "email" as const,
+    notification_pref: "email" as "email" | "sms" | "none" | "push",
   });
 
   useEffect(() => {
