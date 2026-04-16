@@ -1,7 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/supabase/helpers";
-import { generateRoundRobin, assignDates, assignDatesWithPreferences } from "@/lib/scheduling/round-robin";
+import { generateRoundRobin, assignDatesWithPreferences } from "@/lib/scheduling/round-robin";
 import { NextRequest, NextResponse } from "next/server";
 
 /**
@@ -69,6 +68,8 @@ export async function POST(request: NextRequest) {
   } = body;
 
   const supabase = createAdminClient();
+  const pairKey = (teamA: string, teamB: string) =>
+    [teamA, teamB].sort().join("-");
 
   // Verify ownership or staff access
   const { data: league } = await supabase
@@ -92,10 +93,10 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Get league timezone for correct timestamp conversion
+  // Get league metadata for authorization and timezone-safe timestamp conversion
   const { data: leagueInfo } = await supabase
     .from("leagues")
-    .select("timezone")
+    .select("timezone, organizer_id")
     .eq("id", leagueId)
     .single();
   const timezone = leagueInfo?.timezone || "America/New_York";
@@ -148,8 +149,15 @@ export async function POST(request: NextRequest) {
     const { data: locsData } = await supabase
       .from("locations")
       .select("id, name, court_count")
+      .eq("organizer_id", leagueInfo?.organizer_id)
       .in("id", effectiveLocationIds);
     locationsData = locsData || [];
+    if (locationsData.length !== effectiveLocationIds.length) {
+      return NextResponse.json(
+        { error: "One or more selected locations are invalid for this league" },
+        { status: 400 }
+      );
+    }
   }
   const locationsMap = new Map(locationsData.map((l) => [l.id, l]));
 
@@ -180,7 +188,7 @@ export async function POST(request: NextRequest) {
   const parseLocalDate = (s: string) => new Date(s.includes("T") ? s : `${s}T00:00:00`);
 
   // If regenerating, fetch games before the regeneration date to avoid duplicate matchups
-  let existingMatchups = new Set<string>();
+  const existingMatchupCounts = new Map<string, number>();
   if (regenerateFrom) {
     // Parse the regeneration date and convert to UTC ISO for comparison
     const regenerationDate = localToUTCISO(parseLocalDate(regenerateFrom), timezone);
@@ -195,9 +203,8 @@ export async function POST(request: NextRequest) {
 
     if (existingGames) {
       for (const game of existingGames) {
-        // Store both directions of the matchup (A-B and B-A are the same matchup)
-        const [teamA, teamB] = [game.home_team_id, game.away_team_id].sort();
-        existingMatchups.add(`${teamA}-${teamB}`);
+        const key = pairKey(game.home_team_id, game.away_team_id);
+        existingMatchupCounts.set(key, (existingMatchupCounts.get(key) || 0) + 1);
       }
     }
   }
@@ -235,13 +242,18 @@ export async function POST(request: NextRequest) {
       allMatchups = [];
 
       // 1. Generate within-division matchups for each division
-      for (const [divId, teamIds] of divisionTeams) {
+      for (const [, teamIds] of divisionTeams) {
         if (teamIds.length >= 2) {
           allMatchups.push(...generateRoundRobin(teamIds, matchupFrequency));
         }
       }
 
-      // 2. Generate cross-division matchups based on rules
+      // 2. Generate cross-division matchups based on rules, batching independent
+      // pairings into shared rounds instead of creating one round per game.
+      let maxExistingRound = allMatchups.reduce(
+        (max, matchup) => Math.max(max, matchup.round),
+        0
+      );
       const divisionIds = Array.from(divisionTeams.keys());
       for (let i = 0; i < divisionIds.length; i++) {
         for (let j = i + 1; j < divisionIds.length; j++) {
@@ -250,18 +262,30 @@ export async function POST(request: NextRequest) {
           if (canDivisionsPlay(divA === "__none__" ? null : divA, divB === "__none__" ? null : divB)) {
             const teamsA = divisionTeams.get(divA) || [];
             const teamsB = divisionTeams.get(divB) || [];
-            // Create matchups between all teams in divA and all teams in divB
-            for (const teamA of teamsA) {
-              for (const teamB of teamsB) {
-                for (let freq = 0; freq < matchupFrequency; freq++) {
-                  // Alternate home/away
+            const roundSize = Math.max(teamsA.length, teamsB.length);
+            if (roundSize === 0) continue;
+
+            const paddedA = [...teamsA];
+            const paddedB = [...teamsB];
+            while (paddedA.length < roundSize) paddedA.push("BYE");
+            while (paddedB.length < roundSize) paddedB.push("BYE");
+
+            for (let freq = 0; freq < matchupFrequency; freq++) {
+              for (let round = 0; round < roundSize; round++) {
+                const roundNumber = maxExistingRound + (freq * roundSize) + round + 1;
+                for (let idx = 0; idx < roundSize; idx++) {
+                  const teamA = paddedA[idx];
+                  const teamB = paddedB[(idx + round) % roundSize];
+                  if (teamA === "BYE" || teamB === "BYE") continue;
+
                   if (freq % 2 === 0) {
-                    allMatchups.push({ home: teamA, away: teamB, round: allMatchups.length + 1 });
+                    allMatchups.push({ home: teamA, away: teamB, round: roundNumber });
                   } else {
-                    allMatchups.push({ home: teamB, away: teamA, round: allMatchups.length + 1 });
+                    allMatchups.push({ home: teamB, away: teamA, round: roundNumber });
                   }
                 }
               }
+              maxExistingRound += roundSize;
             }
           }
         }
@@ -293,12 +317,16 @@ export async function POST(request: NextRequest) {
 
   // Filter out matchups that already happened before the regeneration date
   let skippedExistingMatchups = 0;
-  if (regenerateFrom && existingMatchups.size > 0) {
+  if (regenerateFrom && existingMatchupCounts.size > 0) {
     const originalCount = allMatchups.length;
     allMatchups = allMatchups.filter((matchup) => {
-      const [teamA, teamB] = [matchup.home, matchup.away].sort();
-      const matchupKey = `${teamA}-${teamB}`;
-      return !existingMatchups.has(matchupKey);
+      const matchupKey = pairKey(matchup.home, matchup.away);
+      const remainingPriorGames = existingMatchupCounts.get(matchupKey) || 0;
+      if (remainingPriorGames > 0) {
+        existingMatchupCounts.set(matchupKey, remainingPriorGames - 1);
+        return false;
+      }
+      return true;
     });
     skippedExistingMatchups = originalCount - allMatchups.length;
   }
@@ -405,7 +433,19 @@ export async function POST(request: NextRequest) {
   }
 
   // Insert new games, distributing across available location court slots per date
-  const gamesToInsert: any[] = [];
+  const gamesToInsert: Array<{
+    league_id: string;
+    home_team_id: string;
+    away_team_id: string;
+    scheduled_at: string;
+    venue: string | null;
+    court: string | null;
+    week_number: number;
+    status: "scheduled";
+    location_id: string | null;
+    preference_applied: unknown;
+    scheduling_notes: string | null;
+  }> = [];
 
   if (courtSlots.length > 0) {
     // Group scheduled games by date for per-date court distribution

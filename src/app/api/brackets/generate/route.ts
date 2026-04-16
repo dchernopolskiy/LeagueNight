@@ -4,6 +4,47 @@ import { generateBracket } from "@/lib/scheduling/brackets";
 import { NextRequest, NextResponse } from "next/server";
 import type { Standing, Team } from "@/lib/types";
 
+function localToUTCISO(date: Date, timezone: string): string {
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const day = date.getDate();
+  const hours = date.getHours();
+  const minutes = date.getMinutes();
+
+  let guess = new Date(Date.UTC(year, month, day, hours, minutes, 0));
+
+  for (let i = 0; i < 2; i++) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).formatToParts(guess);
+
+    const get = (type: string) =>
+      parseInt(parts.find((p) => p.type === type)?.value || "0");
+
+    const gotH = get("hour") === 24 ? 0 : get("hour");
+    const gotMs = Date.UTC(
+      get("year"),
+      get("month") - 1,
+      get("day"),
+      gotH,
+      get("minute"),
+      0
+    );
+    const wantMs = Date.UTC(year, month, day, hours, minutes, 0);
+
+    guess = new Date(guess.getTime() + (wantMs - gotMs));
+  }
+
+  return guess.toISOString();
+}
+
 export async function POST(request: NextRequest) {
   const profile = await getProfile();
   if (!profile) {
@@ -66,7 +107,7 @@ export async function POST(request: NextRequest) {
 
   const { data: leagueMeta } = await supabase
     .from("leagues")
-    .select("id, organizer_id")
+    .select("id, organizer_id, timezone")
     .eq("id", leagueId)
     .single();
 
@@ -107,6 +148,7 @@ export async function POST(request: NextRequest) {
       court: (loc.court_count || 1) > 1 ? `Court ${index + 1}` : null,
     }))
   );
+  const timezone = leagueMeta.timezone || "America/New_York";
 
   function buildScheduledGame(gameIndex: number) {
     const duration = defaultDurationMinutes || 60;
@@ -142,7 +184,10 @@ export async function POST(request: NextRequest) {
     }
 
     return {
-      scheduledAt: date.toISOString(),
+      scheduledAt:
+        startDate || defaultStartTime
+          ? localToUTCISO(date, timezone)
+          : date.toISOString(),
       locationId: courtSlot?.locationId || null,
       venue: courtSlot?.locationName || null,
       court: courtSlot?.court || null,
@@ -194,6 +239,7 @@ export async function POST(request: NextRequest) {
   const allBrackets = [];
   const allSlots = [];
   const allGames = [];
+  let globalGameOffset = 0;
 
   for (let bi = 0; bi < bracketCount; bi++) {
     const start = bi * perBracket;
@@ -266,7 +312,7 @@ export async function POST(request: NextRequest) {
 
       if (topSlot?.team_id && bottomSlot?.team_id) {
         const gameIdx = gameInserts.length;
-        const scheduledGame = buildScheduledGame(gameIdx);
+        const scheduledGame = buildScheduledGame(globalGameOffset + gameIdx);
         matchupGameIdx.push(gameIdx);
         gameInserts.push({
           league_id: leagueId,
@@ -303,6 +349,8 @@ export async function POST(request: NextRequest) {
 
       insertedGames = games || [];
     }
+
+    globalGameOffset += gameInserts.length;
 
     // Assign game IDs to first round slot pairs using positional matchup index.
     const slotsWithGames = slots.map((slot) => {

@@ -61,6 +61,47 @@ interface Matchup {
   bracket: "winners" | "losers" | "grand_final";
 }
 
+function localToUTCISO(date: Date, timezone: string): string {
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const day = date.getDate();
+  const hours = date.getHours();
+  const minutes = date.getMinutes();
+
+  let guess = new Date(Date.UTC(year, month, day, hours, minutes, 0));
+
+  for (let i = 0; i < 2; i++) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).formatToParts(guess);
+
+    const get = (type: string) =>
+      parseInt(parts.find((p) => p.type === type)?.value || "0");
+
+    const gotH = get("hour") === 24 ? 0 : get("hour");
+    const gotMs = Date.UTC(
+      get("year"),
+      get("month") - 1,
+      get("day"),
+      gotH,
+      get("minute"),
+      0
+    );
+    const wantMs = Date.UTC(year, month, day, hours, minutes, 0);
+
+    guess = new Date(guess.getTime() + (wantMs - gotMs));
+  }
+
+  return guess.toISOString();
+}
+
 // ── Main Page ────────────────────────────────────────────────────────
 export default function PlayoffsPage() {
   const { leagueId } = useParams<{ leagueId: string }>();
@@ -76,6 +117,7 @@ export default function PlayoffsPage() {
   const [standings, setStandings] = useState<Standing[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [leagueName, setLeagueName] = useState("");
+  const [leagueTimezone, setLeagueTimezone] = useState("America/New_York");
   const [leagueSettings, setLeagueSettings] = useState<LeagueSettings>({});
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -132,10 +174,15 @@ export default function PlayoffsPage() {
           .select("*")
           .eq("league_id", leagueId)
           .order("rank"),
-        supabase.from("leagues").select("name, organizer_id, settings").eq("id", leagueId).single(),
+        supabase
+          .from("leagues")
+          .select("name, organizer_id, settings, timezone")
+          .eq("id", leagueId)
+          .single(),
         supabase.from("locations").select("*").order("name"),
       ]);
     setLeagueName(leagueRes.data?.name || "");
+    setLeagueTimezone(leagueRes.data?.timezone || "America/New_York");
     if (leagueRes.data?.settings) setLeagueSettings(leagueRes.data.settings as LeagueSettings);
     // Filter locations to organizer's — locations belong to organizer, not league
     const organizerId = leagueRes.data?.organizer_id;
@@ -262,6 +309,7 @@ export default function PlayoffsPage() {
           );
         }
 
+        let nextGlobalGameIndex = games.length;
         for (const [bracketId, slots] of allSlots.entries()) {
           const matchSlots = slots.filter((s) => s.game_id === gameId);
           if (matchSlots.length < 2) continue;
@@ -364,7 +412,10 @@ export default function PlayoffsPage() {
             }
 
             return {
-              scheduledAt: date.toISOString(),
+              scheduledAt:
+                bracketData?.start_date || bracketData?.default_start_time
+                  ? localToUTCISO(date, leagueTimezone)
+                  : date.toISOString(),
               locationId: courtSlot?.locationId || null,
               venue: courtSlot?.venue || null,
               court: courtSlot?.court || null,
@@ -375,10 +426,6 @@ export default function PlayoffsPage() {
             const sorted = [...freshSlots].sort(
               (a, b) => a.round - b.round || a.position - b.position
             );
-            const existingGameCount = new Set(
-              sorted.map((slot) => slot.game_id).filter(Boolean)
-            ).size;
-            let newGameIndex = existingGameCount;
             for (let si = 0; si < sorted.length; si += 2) {
               const top = sorted[si];
               const bot = sorted[si + 1];
@@ -390,7 +437,7 @@ export default function PlayoffsPage() {
                 !top.game_id &&
                 !bot.game_id
               ) {
-                const autoGame = buildAutoScheduledGame(newGameIndex);
+                const autoGame = buildAutoScheduledGame(nextGlobalGameIndex);
                 const { data: newGame } = await supabase
                   .from("games")
                   .insert({
@@ -409,7 +456,7 @@ export default function PlayoffsPage() {
                   .select("id")
                   .single();
                 if (newGame) {
-                  newGameIndex += 1;
+                  nextGlobalGameIndex += 1;
                   await supabase
                     .from("bracket_slots")
                     .update({ game_id: newGame.id })
