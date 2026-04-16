@@ -349,7 +349,7 @@ export default function PlayoffsPage() {
             supabase.from("bracket_slots").select("*").eq("bracket_id", bracketId).order("round").order("position"),
           ]);
 
-          const bracketLocationIds =
+          const bracketLocationIds: string[] =
             bracketData?.default_location_ids?.length
               ? bracketData.default_location_ids
               : bracketData?.default_location_id
