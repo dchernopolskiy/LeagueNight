@@ -70,14 +70,6 @@ export default function SchedulePage() {
 
   useEffect(() => {
     loadLocations();
-    // Re-fetch when the tab regains focus so stale unavailability data
-    // (added on the Locations page) gets picked up.
-    function onFocus() {
-      refetchLeague();
-      loadLocations();
-    }
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
   }, [leagueId]);
 
   async function loadLocations() {

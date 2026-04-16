@@ -108,9 +108,6 @@ export default function PlayoffsPage() {
 
   useEffect(() => {
     loadData();
-    function onFocus() { loadData(); }
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
   }, [leagueId]);
 
   async function loadData() {
