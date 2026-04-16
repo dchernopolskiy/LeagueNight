@@ -73,6 +73,7 @@ export interface Bracket {
   num_teams: number;
   seed_by: "record" | "points";
   default_location_id: string | null;
+  default_location_ids: string[] | null;
   default_start_time: string | null;
   default_duration_minutes: number | null;
   start_date: string | null;

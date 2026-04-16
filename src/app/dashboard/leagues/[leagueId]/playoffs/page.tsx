@@ -97,7 +97,7 @@ export default function PlayoffsPage() {
   // Scheduling defaults for the bracket
   const [startDate, setStartDate] = useState("");
   const [daysOfWeek, setDaysOfWeek] = useState<number[]>([]);
-  const [defaultLocationId, setDefaultLocationId] = useState("");
+  const [defaultLocationIds, setDefaultLocationIds] = useState<string[]>([]);
   const [defaultStartTime, setDefaultStartTime] = useState("");
   const [defaultDurationMinutes, setDefaultDurationMinutes] = useState("");
 
@@ -106,11 +106,16 @@ export default function PlayoffsPage() {
   const [homeScore, setHomeScore] = useState("");
   const [awayScore, setAwayScore] = useState("");
 
-  useEffect(() => {
-    loadData();
-  }, [leagueId]);
+  const selectedDefaultLocations = useMemo(
+    () => locations.filter((loc) => defaultLocationIds.includes(loc.id)),
+    [locations, defaultLocationIds]
+  );
+  const selectedDefaultCourtCount = useMemo(
+    () => selectedDefaultLocations.reduce((sum, loc) => sum + (loc.court_count || 0), 0),
+    [selectedDefaultLocations]
+  );
 
-  async function loadData() {
+  const loadData = useCallback(async () => {
     const supabase = createClient();
 
     const [bracketsRes, teamsRes, divisionsRes, standingsRes, leagueRes, locationsRes] =
@@ -175,7 +180,11 @@ export default function PlayoffsPage() {
     }
 
     setLoading(false);
-  }
+  }, [leagueId]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   async function handleGenerate() {
     setGenerating(true);
@@ -194,7 +203,7 @@ export default function PlayoffsPage() {
           // Scheduling pattern params
           startDate: startDate || undefined,
           daysOfWeek: daysOfWeek.length > 0 ? daysOfWeek : undefined,
-          defaultLocationId: defaultLocationId || undefined,
+          defaultLocationIds: defaultLocationIds.length > 0 ? defaultLocationIds : undefined,
           defaultStartTime: defaultStartTime || undefined,
           defaultDurationMinutes: defaultDurationMinutes ? parseInt(defaultDurationMinutes) : undefined,
         }),
@@ -284,31 +293,92 @@ export default function PlayoffsPage() {
           // Auto-create games for matchups where both teams are now filled
           // Re-read bracket to get scheduling defaults and fresh slots
           const [{ data: bracketData }, { data: freshSlots }] = await Promise.all([
-            supabase.from("brackets").select("default_location_id, default_start_time, default_duration_minutes").eq("id", bracketId).single(),
+            supabase
+              .from("brackets")
+              .select("default_location_id, default_location_ids, default_start_time, default_duration_minutes, start_date, days_of_week")
+              .eq("id", bracketId)
+              .single(),
             supabase.from("bracket_slots").select("*").eq("bracket_id", bracketId).order("round").order("position"),
           ]);
 
-          // Resolve default location name
-          let autoVenue: string | null = null;
-          if (bracketData?.default_location_id) {
-            const { data: loc } = await supabase.from("locations").select("name").eq("id", bracketData.default_location_id).single();
-            autoVenue = loc?.name || null;
-          }
+          const bracketLocationIds =
+            bracketData?.default_location_ids?.length
+              ? bracketData.default_location_ids
+              : bracketData?.default_location_id
+                ? [bracketData.default_location_id]
+                : [];
 
-          function buildAutoScheduledAt(): string {
-            if (bracketData?.default_start_time) {
-              const now = new Date();
-              const [h, m] = bracketData.default_start_time.split(":").map(Number);
-              now.setHours(h, m, 0, 0);
-              return now.toISOString();
+          const autoCourtSlots = bracketLocationIds.flatMap((locationId) => {
+            const loc = locations.find((entry) => entry.id === locationId);
+            if (!loc) return [];
+            return Array.from(
+              { length: Math.max(loc.court_count || 1, 1) },
+              (_, index) => ({
+                locationId: loc.id,
+                venue: loc.name,
+                court:
+                  (loc.court_count || 1) > 1 ? `Court ${index + 1}` : null,
+              })
+            );
+          });
+
+          function buildAutoScheduledGame(gameIndex: number) {
+            const duration = bracketData?.default_duration_minutes || 60;
+            const timeSlotsPerDay = Math.max(1, Math.floor((4 * 60) / duration));
+            const courtCount = Math.max(autoCourtSlots.length, 1);
+            const slotsPerDay = timeSlotsPerDay * courtCount;
+            const withinDayIndex = gameIndex % slotsPerDay;
+            const timeSlotIndex = Math.floor(withinDayIndex / courtCount);
+            const courtSlot =
+              autoCourtSlots.length > 0
+                ? autoCourtSlots[withinDayIndex % courtCount]
+                : null;
+
+            let date: Date;
+            if (
+              bracketData?.start_date &&
+              bracketData.days_of_week &&
+              bracketData.days_of_week.length > 0
+            ) {
+              date = new Date(bracketData.start_date + "T00:00:00");
+              while (!bracketData.days_of_week.includes(date.getDay())) {
+                date.setDate(date.getDate() + 1);
+              }
+
+              const sessionIndex = Math.floor(gameIndex / slotsPerDay);
+              for (let i = 0; i < sessionIndex; i++) {
+                date.setDate(date.getDate() + 1);
+                while (!bracketData.days_of_week.includes(date.getDay())) {
+                  date.setDate(date.getDate() + 1);
+                }
+              }
+            } else {
+              date = new Date();
             }
-            return new Date().toISOString();
+
+            if (bracketData?.default_start_time) {
+              const [h, m] = bracketData.default_start_time
+                .split(":")
+                .map(Number);
+              date.setHours(h, m + timeSlotIndex * duration, 0, 0);
+            }
+
+            return {
+              scheduledAt: date.toISOString(),
+              locationId: courtSlot?.locationId || null,
+              venue: courtSlot?.venue || null,
+              court: courtSlot?.court || null,
+            };
           }
 
           if (freshSlots) {
             const sorted = [...freshSlots].sort(
               (a, b) => a.round - b.round || a.position - b.position
             );
+            const existingGameCount = new Set(
+              sorted.map((slot) => slot.game_id).filter(Boolean)
+            ).size;
+            let newGameIndex = existingGameCount;
             for (let si = 0; si < sorted.length; si += 2) {
               const top = sorted[si];
               const bot = sorted[si + 1];
@@ -320,23 +390,26 @@ export default function PlayoffsPage() {
                 !top.game_id &&
                 !bot.game_id
               ) {
+                const autoGame = buildAutoScheduledGame(newGameIndex);
                 const { data: newGame } = await supabase
                   .from("games")
                   .insert({
                     league_id: leagueId,
                     home_team_id: top.team_id,
                     away_team_id: bot.team_id,
-                    scheduled_at: buildAutoScheduledAt(),
+                    scheduled_at: autoGame.scheduledAt,
                     status: "scheduled",
                     is_playoff: true,
-                    ...(bracketData?.default_location_id && {
-                      location_id: bracketData.default_location_id,
-                      venue: autoVenue,
+                    ...(autoGame.locationId && {
+                      location_id: autoGame.locationId,
+                      venue: autoGame.venue,
+                      court: autoGame.court,
                     }),
                   })
                   .select("id")
                   .single();
                 if (newGame) {
+                  newGameIndex += 1;
                   await supabase
                     .from("bracket_slots")
                     .update({ game_id: newGame.id })
@@ -708,23 +781,43 @@ export default function PlayoffsPage() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label className="text-xs">Location</Label>
-                    <Select
-                      value={defaultLocationId || "none"}
-                      onValueChange={(v) => v && setDefaultLocationId(v === "none" ? "" : v)}
-                    >
-                      <SelectTrigger className="h-8 text-xs">
-                        <SelectValue placeholder="No default" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">No default</SelectItem>
-                        {locations.map((loc) => (
-                          <SelectItem key={loc.id} value={loc.id}>
-                            {loc.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <Label className="text-xs">Locations</Label>
+                    <div className="rounded-lg border bg-background p-2 space-y-1.5 max-h-40 overflow-y-auto">
+                      {locations.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">
+                          No locations available yet.
+                        </p>
+                      ) : (
+                        locations.map((loc) => (
+                          <label
+                            key={loc.id}
+                            className="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 hover:bg-muted/60 cursor-pointer"
+                          >
+                            <span className="flex items-center gap-2 min-w-0">
+                              <Checkbox
+                                checked={defaultLocationIds.includes(loc.id)}
+                                onCheckedChange={() =>
+                                  setDefaultLocationIds((prev) =>
+                                    prev.includes(loc.id)
+                                      ? prev.filter((id) => id !== loc.id)
+                                      : [...prev, loc.id]
+                                  )
+                                }
+                              />
+                              <span className="text-xs truncate">{loc.name}</span>
+                            </span>
+                            <span className="text-[10px] text-muted-foreground shrink-0">
+                              {loc.court_count} {loc.court_count === 1 ? "court" : "courts"}
+                            </span>
+                          </label>
+                        ))
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {defaultLocationIds.length > 0
+                        ? `${defaultLocationIds.length} location${defaultLocationIds.length === 1 ? "" : "s"} selected · ${selectedDefaultCourtCount} total court${selectedDefaultCourtCount === 1 ? "" : "s"}`
+                        : "No default playoff locations selected"}
+                    </p>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2">
@@ -841,7 +934,6 @@ export default function PlayoffsPage() {
                 <CardContent>
                   <BracketView
                     slots={bracketSlots}
-                    bracket={bracket}
                     teamsMap={teamsMap}
                     gamesMap={gamesMap}
                     locations={locations}
@@ -883,7 +975,6 @@ export default function PlayoffsPage() {
 
 function BracketView({
   slots,
-  bracket,
   teamsMap,
   gamesMap,
   locations,
@@ -903,7 +994,6 @@ function BracketView({
   onScheduleGame,
 }: {
   slots: BracketSlot[];
-  bracket: Bracket;
   teamsMap: Map<string, Team>;
   gamesMap: Map<string, Game>;
   locations: Location[];
@@ -1023,7 +1113,6 @@ function BracketView({
             teamsMap={teamsMap}
             locations={locations}
             allSlots={slots}
-            bracket={bracket}
             canManage={canManage}
             scoringMode={scoringMode}
             setsToWin={setsToWin}
@@ -1060,7 +1149,6 @@ function BracketView({
             teamsMap={teamsMap}
             locations={locations}
             allSlots={slots}
-            bracket={bracket}
             canManage={canManage}
             scoringMode={scoringMode}
             setsToWin={setsToWin}
@@ -1095,7 +1183,6 @@ function BracketView({
             teamsMap={teamsMap}
             locations={locations}
             allSlots={slots}
-            bracket={bracket}
             canManage={canManage}
             scoringMode={scoringMode}
             setsToWin={setsToWin}
@@ -1125,7 +1212,6 @@ function RoundColumns({
   teamsMap,
   locations,
   allSlots,
-  bracket,
   canManage,
   scoringMode,
   setsToWin,
@@ -1143,7 +1229,6 @@ function RoundColumns({
 }: {
   roundNums: number[];
   allSlots: BracketSlot[];
-  bracket: Bracket;
   matchupsByRound: Map<number, Matchup[]>;
   teamsMap: Map<string, Team>;
   locations: Location[];
@@ -1193,7 +1278,6 @@ function RoundColumns({
                   teamsMap={teamsMap}
                   locations={locations}
                   allSlots={allSlots}
-                  bracket={bracket}
                   canManage={canManage}
                   scoringMode={scoringMode}
                   setsToWin={setsToWin}
@@ -1225,8 +1309,7 @@ function RoundColumns({
  */
 function formatTBDLabel(
   slot: BracketSlot,
-  allSlots: BracketSlot[],
-  bracket: Bracket
+  allSlots: BracketSlot[]
 ): string {
   // Find which previous slot points to this one (via winner_to or loser_to)
   const sourceSlot = allSlots.find(
@@ -1285,7 +1368,6 @@ function MatchupCard({
   teamsMap,
   locations,
   allSlots,
-  bracket,
   canManage,
   scoringMode,
   setsToWin,
@@ -1304,7 +1386,6 @@ function MatchupCard({
   teamsMap: Map<string, Team>;
   locations: Location[];
   allSlots: BracketSlot[];
-  bracket: Bracket;
   canManage: boolean;
   scoringMode: "game" | "sets";
   setsToWin: number;
@@ -1375,7 +1456,7 @@ function MatchupCard({
             </span>
           )}
           <span className="truncate">
-            {topTeam?.name ?? (isBye && !topTeam ? "BYE" : formatTBDLabel(topSlot, allSlots, bracket))}
+            {topTeam?.name ?? (isBye && !topTeam ? "BYE" : formatTBDLabel(topSlot, allSlots))}
           </span>
           {topWins && <Trophy className="h-3 w-3 text-green-600 shrink-0" />}
         </span>
@@ -1404,7 +1485,7 @@ function MatchupCard({
             </span>
           )}
           <span className="truncate">
-            {bottomTeam?.name ?? (isBye ? "BYE" : formatTBDLabel(bottomSlot, allSlots, bracket))}
+            {bottomTeam?.name ?? (isBye ? "BYE" : formatTBDLabel(bottomSlot, allSlots))}
           </span>
           {bottomWins && (
             <Trophy className="h-3 w-3 text-green-600 shrink-0" />

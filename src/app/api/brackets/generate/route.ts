@@ -21,6 +21,7 @@ export async function POST(request: NextRequest) {
     teamsPerBracket,
     startDate,
     daysOfWeek,
+    defaultLocationIds,
     defaultLocationId,
     defaultStartTime,
     defaultDurationMinutes,
@@ -63,8 +64,93 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  const { data: leagueMeta } = await supabase
+    .from("leagues")
+    .select("id, organizer_id")
+    .eq("id", leagueId)
+    .single();
+
+  if (!leagueMeta) {
+    return NextResponse.json({ error: "League not found" }, { status: 404 });
+  }
+
+  const effectiveDefaultLocationIds = Array.from(
+    new Set(
+      Array.isArray(defaultLocationIds)
+        ? defaultLocationIds.filter((id): id is string => typeof id === "string" && id.length > 0)
+        : defaultLocationId
+          ? [defaultLocationId]
+          : []
+    )
+  );
+
+  const { data: selectedLocationsData } = effectiveDefaultLocationIds.length > 0
+    ? await supabase
+        .from("locations")
+        .select("id, name, court_count")
+        .eq("organizer_id", leagueMeta.organizer_id)
+        .in("id", effectiveDefaultLocationIds)
+    : { data: [] };
+
+  if ((selectedLocationsData || []).length !== effectiveDefaultLocationIds.length) {
+    return NextResponse.json(
+      { error: "One or more selected locations are invalid for this league" },
+      { status: 400 }
+    );
+  }
+
+  const selectedLocations = selectedLocationsData || [];
+  const courtSlots = selectedLocations.flatMap((loc) =>
+    Array.from({ length: Math.max(loc.court_count || 1, 1) }, (_, index) => ({
+      locationId: loc.id,
+      locationName: loc.name,
+      court: (loc.court_count || 1) > 1 ? `Court ${index + 1}` : null,
+    }))
+  );
+
+  function buildScheduledGame(gameIndex: number) {
+    const duration = defaultDurationMinutes || 60;
+    const timeSlotsPerDay = Math.max(1, Math.floor((4 * 60) / duration));
+    const courtCount = Math.max(courtSlots.length, 1);
+    const slotsPerDay = timeSlotsPerDay * courtCount;
+    const withinDayIndex = gameIndex % slotsPerDay;
+    const timeSlotIndex = Math.floor(withinDayIndex / courtCount);
+    const courtSlot = courtSlots.length > 0 ? courtSlots[withinDayIndex % courtCount] : null;
+
+    let date: Date;
+
+    if (!startDate || !daysOfWeek || !daysOfWeek.length) {
+      date = new Date();
+    } else {
+      date = new Date(startDate + "T00:00:00");
+      while (!daysOfWeek.includes(date.getDay())) {
+        date.setDate(date.getDate() + 1);
+      }
+
+      const sessionIndex = Math.floor(gameIndex / slotsPerDay);
+      for (let i = 0; i < sessionIndex; i++) {
+        date.setDate(date.getDate() + 1);
+        while (!daysOfWeek.includes(date.getDay())) {
+          date.setDate(date.getDate() + 1);
+        }
+      }
+    }
+
+    if (defaultStartTime) {
+      const [h, m] = defaultStartTime.split(":").map(Number);
+      date.setHours(h, m + (timeSlotIndex * duration), 0, 0);
+    }
+
+    return {
+      scheduledAt: date.toISOString(),
+      locationId: courtSlot?.locationId || null,
+      venue: courtSlot?.locationName || null,
+      court: courtSlot?.court || null,
+    };
+  }
+
   // Get standings, optionally filtered by division
-  let standingsQuery = supabase
+  const standingsQuery = supabase
     .from("standings")
     .select("*")
     .eq("league_id", leagueId)
@@ -122,7 +208,7 @@ export async function POST(request: NextRequest) {
         : `${name} — ${bracketCount <= 3 ? ["Top", "Middle", "Bottom"][bi] || `Group ${bi + 1}` : `Group ${bi + 1}`} (Teams ${start + 1}-${end})`;
 
     // Generate bracket structure
-    const { slots, totalRounds } = generateBracket({
+    const { slots } = generateBracket({
       standings: bracketStandings,
       teams: bracketTeams,
       numTeams: bracketStandings.length,
@@ -139,7 +225,8 @@ export async function POST(request: NextRequest) {
         format,
         num_teams: bracketStandings.length,
         seed_by: seedBy,
-        default_location_id: defaultLocationId || null,
+        default_location_id: effectiveDefaultLocationIds[0] || null,
+        default_location_ids: effectiveDefaultLocationIds.length > 0 ? effectiveDefaultLocationIds : null,
         default_start_time: defaultStartTime || null,
         default_duration_minutes: defaultDurationMinutes || null,
         start_date: startDate || null,
@@ -155,62 +242,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Resolve default location name for games
-    let defaultLocationName: string | null = null;
-    if (defaultLocationId) {
-      const { data: loc } = await supabase
-        .from("locations")
-        .select("name")
-        .eq("id", defaultLocationId)
-        .single();
-      defaultLocationName = loc?.name || null;
-    }
-
-    // Schedule a game based on pattern (start date, days of week, duration)
-    function scheduleGame(gameIndex: number): string {
-      // If no scheduling pattern provided, use current time
-      if (!startDate || !daysOfWeek || !daysOfWeek.length) {
-        if (defaultStartTime) {
-          const date = new Date();
-          const [h, m] = defaultStartTime.split(":").map(Number);
-          date.setHours(h, m, 0, 0);
-          return date.toISOString();
-        }
-        return new Date().toISOString();
-      }
-
-      // Start from the provided start date
-      const date = new Date(startDate + "T00:00:00");
-
-      // Find the next valid day from daysOfWeek
-      while (!daysOfWeek.includes(date.getDay())) {
-        date.setDate(date.getDate() + 1);
-      }
-
-      // Calculate how many games can fit in one day
-      const duration = defaultDurationMinutes || 60;
-      // Assume 4 hours window per day (adjustable)
-      const gamesPerDay = Math.floor((4 * 60) / duration);
-
-      // Determine which session/day this game falls into
-      const sessionIndex = Math.floor(gameIndex / gamesPerDay);
-
-      // Advance to the correct day
-      for (let i = 0; i < sessionIndex; i++) {
-        date.setDate(date.getDate() + 1);
-        while (!daysOfWeek.includes(date.getDay())) {
-          date.setDate(date.getDate() + 1);
-        }
-      }
-
-      // Set the time based on slot within the day
-      const [h, m] = (defaultStartTime || "18:00").split(":").map(Number);
-      const slotWithinDay = gameIndex % gamesPerDay;
-      date.setHours(h, m + (slotWithinDay * duration), 0, 0);
-
-      return date.toISOString();
-    }
-
     // Create playoff games for first round matchups.
     // We must iterate ALL R1 slots in pairs (by position order) so that bye slots
     // are skipped correctly — filtering out byes first would mis-pair the remaining teams.
@@ -224,6 +255,7 @@ export async function POST(request: NextRequest) {
       is_playoff: boolean;
       location_id?: string;
       venue?: string;
+      court?: string | null;
     }[] = [];
     // Map from matchup index (i/2) to gameInserts index, for game_id assignment below.
     const matchupGameIdx: (number | null)[] = [];
@@ -234,15 +266,20 @@ export async function POST(request: NextRequest) {
 
       if (topSlot?.team_id && bottomSlot?.team_id) {
         const gameIdx = gameInserts.length;
+        const scheduledGame = buildScheduledGame(gameIdx);
         matchupGameIdx.push(gameIdx);
         gameInserts.push({
           league_id: leagueId,
           home_team_id: topSlot.team_id,
           away_team_id: bottomSlot.team_id,
-          scheduled_at: scheduleGame(gameIdx),
+          scheduled_at: scheduledGame.scheduledAt,
           status: "scheduled",
           is_playoff: true,
-          ...(defaultLocationId && { location_id: defaultLocationId, venue: defaultLocationName }),
+          ...(scheduledGame.locationId && {
+            location_id: scheduledGame.locationId,
+            venue: scheduledGame.venue,
+            court: scheduledGame.court,
+          }),
         });
       } else {
         matchupGameIdx.push(null); // bye matchup — no game
