@@ -135,12 +135,18 @@ export default async function PlayerPortalPage({
                           {game.venue}
                         </p>
                       )}
-                      {/* RSVP buttons */}
-                      <div className="flex gap-2">
+                      {/* RSVP buttons — native POST form so link-prefetchers don't auto-RSVP */}
+                      <form
+                        action={`/p/${token}/rsvp/${game.id}`}
+                        method="post"
+                        className="flex gap-2"
+                      >
                         {(["yes", "no", "maybe"] as const).map((action) => (
-                          <Link
+                          <button
                             key={action}
-                            href={`/p/${token}/rsvp/${game.id}?action=${action}`}
+                            type="submit"
+                            name="action"
+                            value={action}
                             className={`flex-1 text-center py-1.5 rounded text-sm font-medium border transition-colors ${
                               rsvp?.response === action
                                 ? "bg-primary text-primary-foreground"
@@ -152,9 +158,9 @@ export default async function PlayerPortalPage({
                               : action === "no"
                               ? "Out"
                               : "Maybe"}
-                          </Link>
+                          </button>
                         ))}
-                      </div>
+                      </form>
                     </div>
                   );
                 })}

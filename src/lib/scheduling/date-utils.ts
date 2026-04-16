@@ -38,6 +38,14 @@ export function formatTime(date: Date): string {
  * On the server (UTC), `setHours(19, 0)` creates 19:00 UTC — but we actually
  * mean 19:00 in the league's timezone. This function finds the real UTC instant
  * that corresponds to those year/month/day/hour/minute values in the given tz.
+ *
+ * DST handling:
+ * - "Spring forward" gap (e.g. 02:30 never happens): the solver produces the
+ *   wall-clock that DOES exist on either side — acceptable.
+ * - "Fall back" overlap (e.g. 01:30 happens twice): deterministically returns
+ *   the EARLIER of the two instants. Scheduling games in duplicated local
+ *   hours is already unusual, and picking the earlier instant is the common
+ *   convention (matches CLDR "earlier" rule and Temporal's default).
  */
 export function localToUTCISO(date: Date, timezone: string): string {
   const year = date.getFullYear();
@@ -46,12 +54,9 @@ export function localToUTCISO(date: Date, timezone: string): string {
   const hours = date.getHours();
   const minutes = date.getMinutes();
 
-  // Start with a UTC guess using the same numeric components
-  let guess = new Date(Date.UTC(year, month, day, hours, minutes, 0));
+  const wantMs = Date.UTC(year, month, day, hours, minutes, 0);
 
-  // Iteratively adjust: check what those UTC millis look like in the target
-  // timezone, compute the drift, and correct. Two passes always converge.
-  for (let i = 0; i < 2; i++) {
+  const wallMsInTz = (utcMs: number): number => {
     const parts = new Intl.DateTimeFormat("en-CA", {
       timeZone: timezone,
       year: "numeric",
@@ -61,13 +66,13 @@ export function localToUTCISO(date: Date, timezone: string): string {
       minute: "2-digit",
       second: "2-digit",
       hour12: false,
-    }).formatToParts(guess);
+    }).formatToParts(new Date(utcMs));
 
     const get = (type: string) =>
       parseInt(parts.find((p) => p.type === type)?.value || "0");
 
     const gotH = get("hour") === 24 ? 0 : get("hour");
-    const gotMs = Date.UTC(
+    return Date.UTC(
       get("year"),
       get("month") - 1,
       get("day"),
@@ -75,12 +80,25 @@ export function localToUTCISO(date: Date, timezone: string): string {
       get("minute"),
       0
     );
-    const wantMs = Date.UTC(year, month, day, hours, minutes, 0);
+  };
 
-    guess = new Date(guess.getTime() + (wantMs - gotMs));
+  // Iteratively adjust until the wall-clock in `timezone` matches what we want
+  let guess = wantMs;
+  for (let i = 0; i < 3; i++) {
+    const gotMs = wallMsInTz(guess);
+    const drift = wantMs - gotMs;
+    if (drift === 0) break;
+    guess += drift;
   }
 
-  return guess.toISOString();
+  // DST fall-back disambiguation: if shifting back one hour still produces the
+  // same wall-clock, the wall-time is duplicated — prefer the earlier instant.
+  const earlierCandidate = guess - 3600_000;
+  if (wallMsInTz(earlierCandidate) === wantMs) {
+    guess = earlierCandidate;
+  }
+
+  return new Date(guess).toISOString();
 }
 
 /**

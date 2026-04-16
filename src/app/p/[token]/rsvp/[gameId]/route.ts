@@ -1,20 +1,31 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { NextRequest, NextResponse } from "next/server";
 
-export async function GET(
+const VALID_ACTIONS = new Set(["yes", "no", "maybe"]);
+
+export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ token: string; gameId: string }> }
 ) {
   const { token, gameId } = await params;
-  const action = request.nextUrl.searchParams.get("action");
 
-  if (!action || !["yes", "no", "maybe"].includes(action)) {
+  // Read action from form body (native <form method="post">) or query string
+  let action: string | null = null;
+  const contentType = request.headers.get("content-type") || "";
+  if (contentType.includes("application/x-www-form-urlencoded") || contentType.includes("multipart/form-data")) {
+    const form = await request.formData();
+    action = form.get("action")?.toString() ?? null;
+  }
+  if (!action) {
+    action = request.nextUrl.searchParams.get("action");
+  }
+
+  if (!action || !VALID_ACTIONS.has(action)) {
     return NextResponse.json({ error: "Invalid action" }, { status: 400 });
   }
 
   const supabase = createAdminClient();
 
-  // Resolve player from token
   const { data: player } = await supabase
     .from("players")
     .select("id, league_id")
@@ -25,7 +36,6 @@ export async function GET(
     return NextResponse.json({ error: "Invalid token" }, { status: 404 });
   }
 
-  // Verify game belongs to this league
   const { data: game } = await supabase
     .from("games")
     .select("id, league_id")
@@ -37,7 +47,6 @@ export async function GET(
     return NextResponse.json({ error: "Game not found" }, { status: 404 });
   }
 
-  // Upsert RSVP
   const { error } = await supabase.from("rsvps").upsert(
     {
       game_id: gameId,
@@ -52,8 +61,8 @@ export async function GET(
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  // Redirect back to player portal
   const url = new URL(`/p/${token}`, request.url);
   url.searchParams.set("rsvp", "success");
-  return NextResponse.redirect(url);
+  // 303 ensures the browser uses GET on the redirect target
+  return NextResponse.redirect(url, 303);
 }

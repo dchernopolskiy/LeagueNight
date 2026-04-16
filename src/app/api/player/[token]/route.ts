@@ -1,5 +1,18 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+
+const patchBodySchema = z.object({
+  notification_pref: z
+    .object({
+      sms: z.boolean().optional(),
+      email: z.boolean().optional(),
+      push: z.boolean().optional(),
+      reminder_hours: z.number().int().min(0).max(168).optional(),
+    })
+    .strict()
+    .optional(),
+});
 
 export async function GET(
   _request: NextRequest,
@@ -26,10 +39,24 @@ export async function PATCH(
   { params }: { params: Promise<{ token: string }> }
 ) {
   const { token } = await params;
-  const body = await request.json();
+
+  let rawBody: unknown;
+  try {
+    rawBody = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const parsed = patchBodySchema.safeParse(rawBody);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Invalid body", issues: parsed.error.issues },
+      { status: 400 }
+    );
+  }
+
   const supabase = createAdminClient();
 
-  // Resolve player
   const { data: player } = await supabase
     .from("players")
     .select("id")
@@ -40,10 +67,9 @@ export async function PATCH(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const allowed = ["notification_pref"];
-  const updates: Record<string, unknown> = {};
-  for (const key of allowed) {
-    if (key in body) updates[key] = body[key];
+  const updates = parsed.data;
+  if (Object.keys(updates).length === 0) {
+    return NextResponse.json({ ok: true });
   }
 
   const { error } = await supabase

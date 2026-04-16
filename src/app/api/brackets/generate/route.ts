@@ -1,49 +1,13 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getProfile } from "@/lib/supabase/helpers";
 import { generateBracket } from "@/lib/scheduling/brackets";
+import { localToUTCISO } from "@/lib/scheduling/date-utils";
 import { NextRequest, NextResponse } from "next/server";
 import type { Standing, Team } from "@/lib/types";
 
-function localToUTCISO(date: Date, timezone: string): string {
-  const year = date.getFullYear();
-  const month = date.getMonth();
-  const day = date.getDate();
-  const hours = date.getHours();
-  const minutes = date.getMinutes();
-
-  let guess = new Date(Date.UTC(year, month, day, hours, minutes, 0));
-
-  for (let i = 0; i < 2; i++) {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: timezone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    }).formatToParts(guess);
-
-    const get = (type: string) =>
-      parseInt(parts.find((p) => p.type === type)?.value || "0");
-
-    const gotH = get("hour") === 24 ? 0 : get("hour");
-    const gotMs = Date.UTC(
-      get("year"),
-      get("month") - 1,
-      get("day"),
-      gotH,
-      get("minute"),
-      0
-    );
-    const wantMs = Date.UTC(year, month, day, hours, minutes, 0);
-
-    guess = new Date(guess.getTime() + (wantMs - gotMs));
-  }
-
-  return guess.toISOString();
-}
+// Default assumed length of a single game-day session when no end-time is configured.
+// Used to derive how many time slots fit in a day for round-robin-style court rotation.
+const DEFAULT_SESSION_HOURS = 8;
 
 export async function POST(request: NextRequest) {
   const profile = await getProfile();
@@ -150,11 +114,15 @@ export async function POST(request: NextRequest) {
   );
   const timezone = leagueMeta.timezone || "America/New_York";
 
+  const duration = defaultDurationMinutes || 60;
+  const timeSlotsPerDay = Math.max(
+    1,
+    Math.floor((DEFAULT_SESSION_HOURS * 60) / duration)
+  );
+  const courtCount = Math.max(courtSlots.length, 1);
+  const slotsPerDay = timeSlotsPerDay * courtCount;
+
   function buildScheduledGame(gameIndex: number) {
-    const duration = defaultDurationMinutes || 60;
-    const timeSlotsPerDay = Math.max(1, Math.floor((4 * 60) / duration));
-    const courtCount = Math.max(courtSlots.length, 1);
-    const slotsPerDay = timeSlotsPerDay * courtCount;
     const withinDayIndex = gameIndex % slotsPerDay;
     const timeSlotIndex = Math.floor(withinDayIndex / courtCount);
     const courtSlot = courtSlots.length > 0 ? courtSlots[withinDayIndex % courtCount] : null;
@@ -191,6 +159,7 @@ export async function POST(request: NextRequest) {
       locationId: courtSlot?.locationId || null,
       venue: courtSlot?.locationName || null,
       court: courtSlot?.court || null,
+      timeSlotIndex,
     };
   }
 
@@ -236,10 +205,25 @@ export async function POST(request: NextRequest) {
   const perBracket = teamsPerBracket || effectiveNumTeams;
   const bracketCount = Math.ceil(effectiveNumTeams / perBracket);
 
-  const allBrackets = [];
+  const allBrackets: { id: string }[] = [];
   const allSlots = [];
-  const allGames = [];
+  const allGames: { id: string }[] = [];
   let globalGameOffset = 0;
+
+  // Track everything we've inserted so we can roll back on any failure mid-loop.
+  // Supabase lacks client-side transactions — this is the next-best option.
+  const insertedBracketIds: string[] = [];
+  const insertedGameIds: string[] = [];
+  async function rollbackAndFail(message: string, status = 500) {
+    if (insertedGameIds.length > 0) {
+      await supabase.from("games").delete().in("id", insertedGameIds);
+    }
+    if (insertedBracketIds.length > 0) {
+      // bracket_slots have ON DELETE CASCADE from brackets, so this is sufficient
+      await supabase.from("brackets").delete().in("id", insertedBracketIds);
+    }
+    return NextResponse.json({ error: message }, { status });
+  }
 
   for (let bi = 0; bi < bracketCount; bi++) {
     const start = bi * perBracket;
@@ -282,11 +266,9 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (bracketError || !bracket) {
-      return NextResponse.json(
-        { error: bracketError?.message || "Failed to create bracket" },
-        { status: 500 }
-      );
+      return rollbackAndFail(bracketError?.message || "Failed to create bracket");
     }
+    insertedBracketIds.push(bracket.id);
 
     // Create playoff games for first round matchups.
     // We must iterate ALL R1 slots in pairs (by position order) so that bye slots
@@ -340,14 +322,11 @@ export async function POST(request: NextRequest) {
         .select("id");
 
       if (gamesError) {
-        await supabase.from("brackets").delete().eq("id", bracket.id);
-        return NextResponse.json(
-          { error: gamesError.message },
-          { status: 500 }
-        );
+        return rollbackAndFail(gamesError.message);
       }
 
       insertedGames = games || [];
+      for (const g of insertedGames) insertedGameIds.push(g.id);
     }
 
     globalGameOffset += gameInserts.length;
@@ -370,10 +349,7 @@ export async function POST(request: NextRequest) {
       .select();
 
     if (slotsError) {
-      return NextResponse.json(
-        { error: slotsError.message },
-        { status: 500 }
-      );
+      return rollbackAndFail(slotsError.message);
     }
 
     allBrackets.push(bracket);

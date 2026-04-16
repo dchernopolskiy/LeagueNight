@@ -1,8 +1,14 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useCallback } from "react";
+import useSWR from "swr";
 import { createClient } from "@/lib/supabase/client";
 import type { Location, LocationUnavailability } from "@/lib/types";
+
+interface LocationsBundle {
+  locations: Location[];
+  unavailability: LocationUnavailability[];
+}
 
 interface UseLocationsReturn {
   locations: Location[];
@@ -19,174 +25,162 @@ interface UseLocationsReturn {
   deleteUnavailability: (id: string) => Promise<boolean>;
 }
 
+async function fetchLocationsBundle(organizerId: string): Promise<LocationsBundle> {
+  const supabase = createClient();
+  const { data: locsData, error: locsError } = await supabase
+    .from("locations")
+    .select("*")
+    .eq("organizer_id", organizerId)
+    .order("name");
+  if (locsError) throw new Error(locsError.message);
+
+  const locations = locsData || [];
+  let unavailability: LocationUnavailability[] = [];
+  if (locations.length > 0) {
+    const locationIds = locations.map((l) => l.id);
+    const { data: unavailData, error: unavailError } = await supabase
+      .from("location_unavailability")
+      .select("*")
+      .in("location_id", locationIds)
+      .order("unavailable_date");
+    if (unavailError) throw new Error(unavailError.message);
+    unavailability = unavailData || [];
+  }
+
+  return { locations, unavailability };
+}
+
 /**
  * Hook for managing locations and their unavailability schedules.
- * Used by organizers to manage their venues.
+ * Backed by SWR.
  */
 export function useLocations(organizerId: string | null): UseLocationsReturn {
-  const [locations, setLocations] = useState<Location[]>([]);
-  const [unavailability, setUnavailability] = useState<LocationUnavailability[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const swrKey = organizerId ? (["locations", organizerId] as const) : null;
+  const { data, error, isLoading, mutate } = useSWR(
+    swrKey,
+    ([, id]) => fetchLocationsBundle(id),
+    { revalidateOnFocus: false, dedupingInterval: 5000 }
+  );
 
-  const fetchData = useCallback(async () => {
-    if (!organizerId) {
-      setLoading(false);
-      return;
-    }
-
-    try {
-      setLoading(true);
-      setError(null);
-      const supabase = createClient();
-
-      const { data: locsData, error: locsError } = await supabase
-        .from("locations")
-        .select("*")
-        .eq("organizer_id", organizerId)
-        .order("name");
-
-      if (locsError) throw new Error(locsError.message);
-
-      setLocations(locsData || []);
-
-      // Fetch unavailability for all locations
-      if (locsData && locsData.length > 0) {
-        const locationIds = locsData.map((l) => l.id);
-        const { data: unavailData, error: unavailError } = await supabase
-          .from("location_unavailability")
-          .select("*")
-          .in("location_id", locationIds)
-          .order("unavailable_date");
-
-        if (unavailError) throw new Error(unavailError.message);
-        setUnavailability(unavailData || []);
-      } else {
-        setUnavailability([]);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load locations");
-    } finally {
-      setLoading(false);
-    }
-  }, [organizerId]);
-
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  const locations = data?.locations || [];
+  const unavailability = data?.unavailability || [];
 
   const addLocation = useCallback(
     async (location: Omit<Location, "id" | "created_at">): Promise<Location | null> => {
-      try {
-        const supabase = createClient();
-        const { data, error: insertError } = await supabase
-          .from("locations")
-          .insert(location)
-          .select()
-          .single();
-
-        if (insertError) throw new Error(insertError.message);
-
-        setLocations((prev) => [...prev, data]);
-        return data;
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to add location");
-        return null;
-      }
+      const supabase = createClient();
+      const { data: inserted, error: insertError } = await supabase
+        .from("locations")
+        .insert(location)
+        .select()
+        .single();
+      if (insertError) return null;
+      await mutate(
+        (prev) => ({
+          locations: [...(prev?.locations || []), inserted],
+          unavailability: prev?.unavailability || [],
+        }),
+        { revalidate: false }
+      );
+      return inserted;
     },
-    []
+    [mutate]
   );
 
   const updateLocation = useCallback(
     async (id: string, updates: Partial<Location>): Promise<boolean> => {
-      try {
-        const supabase = createClient();
-        const { error: updateError } = await supabase
-          .from("locations")
-          .update(updates)
-          .eq("id", id);
-
-        if (updateError) throw new Error(updateError.message);
-
-        setLocations((prev) =>
-          prev.map((loc) => (loc.id === id ? { ...loc, ...updates } : loc))
-        );
-        return true;
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to update location");
-        return false;
-      }
+      const supabase = createClient();
+      const { error: updateError } = await supabase
+        .from("locations")
+        .update(updates)
+        .eq("id", id);
+      if (updateError) return false;
+      await mutate(
+        (prev) => ({
+          locations: (prev?.locations || []).map((l) =>
+            l.id === id ? { ...l, ...updates } : l
+          ),
+          unavailability: prev?.unavailability || [],
+        }),
+        { revalidate: false }
+      );
+      return true;
     },
-    []
+    [mutate]
   );
 
-  const deleteLocation = useCallback(async (id: string): Promise<boolean> => {
-    try {
+  const deleteLocation = useCallback(
+    async (id: string): Promise<boolean> => {
       const supabase = createClient();
       const { error: deleteError } = await supabase
         .from("locations")
         .delete()
         .eq("id", id);
-
-      if (deleteError) throw new Error(deleteError.message);
-
-      setLocations((prev) => prev.filter((loc) => loc.id !== id));
-      setUnavailability((prev) => prev.filter((u) => u.location_id !== id));
+      if (deleteError) return false;
+      await mutate(
+        (prev) => ({
+          locations: (prev?.locations || []).filter((l) => l.id !== id),
+          unavailability: (prev?.unavailability || []).filter(
+            (u) => u.location_id !== id
+          ),
+        }),
+        { revalidate: false }
+      );
       return true;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete location");
-      return false;
-    }
-  }, []);
+    },
+    [mutate]
+  );
 
   const addUnavailability = useCallback(
     async (
       unavail: Omit<LocationUnavailability, "id" | "created_at">
     ): Promise<LocationUnavailability | null> => {
-      try {
-        const supabase = createClient();
-        const { data, error: insertError } = await supabase
-          .from("location_unavailability")
-          .insert(unavail)
-          .select()
-          .single();
-
-        if (insertError) throw new Error(insertError.message);
-
-        setUnavailability((prev) => [...prev, data]);
-        return data;
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to add unavailability");
-        return null;
-      }
+      const supabase = createClient();
+      const { data: inserted, error: insertError } = await supabase
+        .from("location_unavailability")
+        .insert(unavail)
+        .select()
+        .single();
+      if (insertError) return null;
+      await mutate(
+        (prev) => ({
+          locations: prev?.locations || [],
+          unavailability: [...(prev?.unavailability || []), inserted],
+        }),
+        { revalidate: false }
+      );
+      return inserted;
     },
-    []
+    [mutate]
   );
 
-  const deleteUnavailability = useCallback(async (id: string): Promise<boolean> => {
-    try {
+  const deleteUnavailability = useCallback(
+    async (id: string): Promise<boolean> => {
       const supabase = createClient();
       const { error: deleteError } = await supabase
         .from("location_unavailability")
         .delete()
         .eq("id", id);
-
-      if (deleteError) throw new Error(deleteError.message);
-
-      setUnavailability((prev) => prev.filter((u) => u.id !== id));
+      if (deleteError) return false;
+      await mutate(
+        (prev) => ({
+          locations: prev?.locations || [],
+          unavailability: (prev?.unavailability || []).filter((u) => u.id !== id),
+        }),
+        { revalidate: false }
+      );
       return true;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete unavailability");
-      return false;
-    }
-  }, []);
+    },
+    [mutate]
+  );
 
   return {
     locations,
     unavailability,
-    loading,
-    error,
-    refetch: fetchData,
+    loading: isLoading,
+    error: error instanceof Error ? error.message : null,
+    refetch: async () => {
+      await mutate();
+    },
     addLocation,
     updateLocation,
     deleteLocation,

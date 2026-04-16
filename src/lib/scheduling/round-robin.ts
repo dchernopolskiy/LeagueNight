@@ -25,8 +25,12 @@ export function generateRoundRobin(
   const rounds = n - 1;
   const allMatchups: Matchup[] = [];
 
+  // Continue rotation across cycles (don't reset cycleTeams each cycle).
+  // Otherwise, with an odd team count, the same team always draws the BYE
+  // during every cycle → that team plays `frequency` fewer games than others.
+  const cycleTeams = [...teams];
+
   for (let cycle = 0; cycle < frequency; cycle++) {
-    const cycleTeams = [...teams]; // fresh rotation for each cycle
     const roundOffset = cycle * rounds;
 
     for (let round = 0; round < rounds; round++) {

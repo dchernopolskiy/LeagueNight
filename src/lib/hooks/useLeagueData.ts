@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import useSWR from "swr";
 import { createClient } from "@/lib/supabase/client";
 import type {
   League,
@@ -30,15 +30,89 @@ interface UseLeagueDataReturn extends LeagueData {
   refetch: () => Promise<void>;
 }
 
-// Default options object - created once to maintain stable reference
-const DEFAULT_OPTIONS = {};
+const EMPTY_DATA: LeagueData = {
+  league: null,
+  teams: [],
+  divisions: [],
+  players: [],
+  games: [],
+  patterns: [],
+  crossPlayRules: [],
+  staff: [],
+};
+
+interface FetchOptions {
+  includeGames: boolean;
+  includePlayers: boolean;
+  includePatterns: boolean;
+  includeStaff: boolean;
+}
+
+async function fetchLeagueData(
+  leagueId: string,
+  opts: FetchOptions
+): Promise<LeagueData> {
+  const supabase = createClient();
+
+  const [
+    leagueRes,
+    teamsRes,
+    divisionsRes,
+    playersRes,
+    gamesRes,
+    patternsRes,
+    crossPlayRes,
+    staffRes,
+  ] = await Promise.all([
+    supabase.from("leagues").select("*").eq("id", leagueId).single(),
+    supabase.from("teams").select("*").eq("league_id", leagueId),
+    supabase.from("divisions").select("*").eq("league_id", leagueId).order("level"),
+    opts.includePlayers
+      ? supabase.from("players").select("*").eq("league_id", leagueId)
+      : Promise.resolve({ data: null, error: null }),
+    opts.includeGames
+      ? supabase
+          .from("games")
+          .select("*")
+          .eq("league_id", leagueId)
+          .order("scheduled_at")
+      : Promise.resolve({ data: null, error: null }),
+    opts.includePatterns
+      ? supabase
+          .from("game_day_patterns")
+          .select("*")
+          .eq("league_id", leagueId)
+          .order("starts_on")
+      : Promise.resolve({ data: null, error: null }),
+    supabase.from("division_cross_play").select("*").eq("league_id", leagueId),
+    opts.includeStaff
+      ? supabase.from("league_staff").select("*").eq("league_id", leagueId)
+      : Promise.resolve({ data: null, error: null }),
+  ]);
+
+  if (leagueRes.error) throw new Error(leagueRes.error.message);
+  if (teamsRes.error) throw new Error(teamsRes.error.message);
+  if (divisionsRes.error) throw new Error(divisionsRes.error.message);
+
+  return {
+    league: leagueRes.data,
+    teams: teamsRes.data || [],
+    divisions: divisionsRes.data || [],
+    players: playersRes.data || [],
+    games: gamesRes.data || [],
+    patterns: patternsRes.data || [],
+    crossPlayRules: crossPlayRes.data || [],
+    staff: staffRes.data || [],
+  };
+}
 
 /**
  * Comprehensive hook for loading all league-related data.
- * Handles loading states, errors, and provides a refetch function.
  *
- * @param leagueId - The league ID to fetch data for
- * @param options - Optional configuration for what data to load
+ * Backed by SWR so concurrent mounts share a single in-flight request,
+ * results are cached across route transitions, and windows/tabs can be
+ * revalidated on focus. Public API (fields, loading, error, refetch) is
+ * unchanged from the previous useState/useEffect implementation.
  */
 export function useLeagueData(
   leagueId: string | null,
@@ -47,118 +121,52 @@ export function useLeagueData(
     includePlayers?: boolean;
     includePatterns?: boolean;
     includeStaff?: boolean;
-  } = DEFAULT_OPTIONS
+  } = {}
 ): UseLeagueDataReturn {
-  // Memoize options to prevent unnecessary re-renders
-  const memoizedOptions = useMemo(() => options, [
-    options.includeGames,
-    options.includePlayers,
-    options.includePatterns,
-    options.includeStaff,
-  ]);
+  const opts: FetchOptions = {
+    includeGames: options.includeGames ?? true,
+    includePlayers: options.includePlayers ?? true,
+    includePatterns: options.includePatterns ?? true,
+    includeStaff: options.includeStaff ?? true,
+  };
 
-  const {
-    includeGames = true,
-    includePlayers = true,
-    includePatterns = true,
-    includeStaff = true,
-  } = memoizedOptions;
+  // Cache key encodes both leagueId and the include flags so different option
+  // combinations don't collide in the cache.
+  const swrKey = leagueId
+    ? ([
+        "leagueData",
+        leagueId,
+        opts.includeGames,
+        opts.includePlayers,
+        opts.includePatterns,
+        opts.includeStaff,
+      ] as const)
+    : null;
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<LeagueData>({
-    league: null,
-    teams: [],
-    divisions: [],
-    players: [],
-    games: [],
-    patterns: [],
-    crossPlayRules: [],
-    staff: [],
-  });
-
-  const fetchData = useCallback(async () => {
-    if (!leagueId) {
-      setLoading(false);
-      return;
+  const { data, error, isLoading, mutate } = useSWR(
+    swrKey,
+    ([, id, g, p, pt, s]) =>
+      fetchLeagueData(id, {
+        includeGames: g,
+        includePlayers: p,
+        includePatterns: pt,
+        includeStaff: s,
+      }),
+    {
+      revalidateOnFocus: false,
+      dedupingInterval: 5000,
     }
+  );
 
-    try {
-      setLoading(true);
-      setError(null);
-      const supabase = createClient();
-
-      // Fetch all data in parallel for performance
-      const [
-        leagueRes,
-        teamsRes,
-        divisionsRes,
-        playersRes,
-        gamesRes,
-        patternsRes,
-        crossPlayRes,
-        staffRes,
-      ] = await Promise.all([
-        supabase.from("leagues").select("*").eq("id", leagueId).single(),
-        supabase.from("teams").select("*").eq("league_id", leagueId),
-        supabase.from("divisions").select("*").eq("league_id", leagueId).order("level"),
-        includePlayers
-          ? supabase.from("players").select("*").eq("league_id", leagueId)
-          : Promise.resolve({ data: null, error: null }),
-        includeGames
-          ? supabase
-              .from("games")
-              .select("*")
-              .eq("league_id", leagueId)
-              .order("scheduled_at")
-          : Promise.resolve({ data: null, error: null }),
-        includePatterns
-          ? supabase
-              .from("game_day_patterns")
-              .select("*")
-              .eq("league_id", leagueId)
-              .order("starts_on")
-          : Promise.resolve({ data: null, error: null }),
-        supabase
-          .from("division_cross_play")
-          .select("*")
-          .eq("league_id", leagueId),
-        includeStaff
-          ? supabase.from("league_staff").select("*").eq("league_id", leagueId)
-          : Promise.resolve({ data: null, error: null }),
-      ]);
-
-      // Check for errors
-      if (leagueRes.error) throw new Error(leagueRes.error.message);
-      if (teamsRes.error) throw new Error(teamsRes.error.message);
-      if (divisionsRes.error) throw new Error(divisionsRes.error.message);
-
-      setData({
-        league: leagueRes.data,
-        teams: teamsRes.data || [],
-        divisions: divisionsRes.data || [],
-        players: playersRes.data || [],
-        games: gamesRes.data || [],
-        patterns: patternsRes.data || [],
-        crossPlayRules: crossPlayRes.data || [],
-        staff: staffRes.data || [],
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load league data");
-    } finally {
-      setLoading(false);
-    }
-  }, [leagueId, includeGames, includePlayers, includePatterns, includeStaff]);
-
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  const effective = data || EMPTY_DATA;
 
   return {
-    ...data,
-    loading,
-    error,
-    refetch: fetchData,
+    ...effective,
+    loading: isLoading,
+    error: error instanceof Error ? error.message : null,
+    refetch: async () => {
+      await mutate();
+    },
   };
 }
 

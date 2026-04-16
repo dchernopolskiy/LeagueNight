@@ -1,52 +1,8 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getProfile } from "@/lib/supabase/helpers";
 import { generateRoundRobin, assignDatesWithPreferences } from "@/lib/scheduling/round-robin";
+import { localToUTCISO } from "@/lib/scheduling/date-utils";
 import { NextRequest, NextResponse } from "next/server";
-
-/**
- * Convert a Date whose get*() components represent the intended local time
- * in `timezone` into a correct UTC ISO string.
- *
- * On the server (UTC), `setHours(19, 0)` creates 19:00 UTC — but we actually
- * mean 19:00 in the league's timezone. This function finds the real UTC instant
- * that corresponds to those year/month/day/hour/minute values in the given tz.
- */
-function localToUTCISO(date: Date, timezone: string): string {
-  const year = date.getFullYear();
-  const month = date.getMonth(); // 0-indexed
-  const day = date.getDate();
-  const hours = date.getHours();
-  const minutes = date.getMinutes();
-
-  // Start with a UTC guess using the same numeric components
-  let guess = new Date(Date.UTC(year, month, day, hours, minutes, 0));
-
-  // Iteratively adjust: check what those UTC millis look like in the target
-  // timezone, compute the drift, and correct. Two passes always converge.
-  for (let i = 0; i < 2; i++) {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: timezone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    }).formatToParts(guess);
-
-    const get = (type: string) =>
-      parseInt(parts.find((p) => p.type === type)?.value || "0");
-
-    const gotH = get("hour") === 24 ? 0 : get("hour");
-    const gotMs = Date.UTC(get("year"), get("month") - 1, get("day"), gotH, get("minute"), 0);
-    const wantMs = Date.UTC(year, month, day, hours, minutes, 0);
-
-    guess = new Date(guess.getTime() + (wantMs - gotMs));
-  }
-
-  return guess.toISOString();
-}
 
 export async function POST(request: NextRequest) {
   const profile = await getProfile();
@@ -315,20 +271,24 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Filter out matchups that already happened before the regeneration date
+  // Filter out matchups that already happened before the regeneration date.
+  // Relies on Array.prototype.filter's in-order iteration guarantee: each
+  // already-played matchup decrements the remaining count by one, so duplicate
+  // pairings (double round-robin) are skipped proportionally.
   let skippedExistingMatchups = 0;
   if (regenerateFrom && existingMatchupCounts.size > 0) {
-    const originalCount = allMatchups.length;
-    allMatchups = allMatchups.filter((matchup) => {
+    const filtered: typeof allMatchups = [];
+    for (const matchup of allMatchups) {
       const matchupKey = pairKey(matchup.home, matchup.away);
-      const remainingPriorGames = existingMatchupCounts.get(matchupKey) || 0;
-      if (remainingPriorGames > 0) {
-        existingMatchupCounts.set(matchupKey, remainingPriorGames - 1);
-        return false;
+      const remaining = existingMatchupCounts.get(matchupKey) || 0;
+      if (remaining > 0) {
+        existingMatchupCounts.set(matchupKey, remaining - 1);
+        skippedExistingMatchups++;
+        continue;
       }
-      return true;
-    });
-    skippedExistingMatchups = originalCount - allMatchups.length;
+      filtered.push(matchup);
+    }
+    allMatchups = filtered;
   }
 
   // Assign dates — use total courts across all selected locations
