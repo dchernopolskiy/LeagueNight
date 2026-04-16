@@ -292,6 +292,24 @@ export default function SchedulePage() {
     }
   }
 
+  async function resetGameScore(gameId: string) {
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("games")
+      .update({
+        home_score: null,
+        away_score: null,
+        status: "scheduled",
+      })
+      .eq("id", gameId);
+
+    if (!error) {
+      await supabase.rpc("recalculate_standings", { p_league_id: leagueId });
+      await refetchLeague();
+      resetScoreEditor();
+    }
+  }
+
   const teamsMap = new Map(teams.map((t) => [t.id, t]));
   const locationsMap = new Map(locations.map((l) => [l.id, l]));
 
@@ -688,6 +706,16 @@ export default function SchedulePage() {
                                         </div>
                                       )}
                                       <div className="flex justify-end gap-2">
+                                        {game.status === "completed" && (
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="text-destructive hover:bg-destructive/10 border-destructive/30"
+                                            onClick={() => resetGameScore(game.id)}
+                                          >
+                                            Reset Scores
+                                          </Button>
+                                        )}
                                         <Button variant="ghost" size="sm" onClick={resetScoreEditor}>
                                           Cancel
                                         </Button>
@@ -727,12 +755,13 @@ export default function SchedulePage() {
                                     <div className="flex items-center gap-1">
                                       {game.status === "cancelled" ? (
                                         <Badge variant="destructive">Cancelled</Badge>
-                                      ) : game.status === "completed" ? (
-                                        <Badge>
-                                          {game.home_score} - {game.away_score}
-                                        </Badge>
                                       ) : canManage ? (
                                         <>
+                                          {game.status === "completed" && (
+                                            <Badge>
+                                              {game.home_score} - {game.away_score}
+                                            </Badge>
+                                          )}
                                           <Button
                                             variant="ghost"
                                             size="sm"
