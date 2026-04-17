@@ -46,6 +46,17 @@ import { useLeagueData } from "@/lib/hooks";
 import { PreferenceIndicator } from "@/components/dashboard/preference-indicator";
 
 
+function Stat({ label, value, warn }: { label: string; value: string | number; warn?: boolean }) {
+  return (
+    <div>
+      <div className="text-[11px] uppercase tracking-wide text-emerald-900/60">{label}</div>
+      <div className={`text-base font-semibold ${warn ? "text-amber-700" : "text-emerald-900"}`}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
 export default function SchedulePage() {
   const { leagueId } = useParams<{ leagueId: string }>();
   const { canManage } = useLeagueRole();
@@ -86,6 +97,19 @@ export default function SchedulePage() {
     unplayedCount: number;
     regenerateFrom: string;
     message: string;
+  } | null>(null);
+  const [generationStats, setGenerationStats] = useState<{
+    count: number;
+    targetWeeks: number;
+    byes: Array<{ teamId: string; weekNumber: number; backToBack: boolean }>;
+    droppedPairs: Array<{ teamA: string; teamB: string; reason: string }>;
+    preflight: {
+      biggestDivisionName: string | null;
+      biggestDivisionSize: number;
+      minWeeksNeeded: number;
+      availableWeeks: number;
+      matchupFrequency: number;
+    };
   } | null>(null);
 
   // Fetch locations separately (organizer-scoped, not league-scoped)
@@ -224,6 +248,13 @@ export default function SchedulePage() {
       } else {
         setSchedulingWarnings([]);
       }
+      setGenerationStats({
+        count: data.count ?? 0,
+        targetWeeks: data.targetWeeks ?? 0,
+        byes: data.byes ?? [],
+        droppedPairs: data.droppedPairs ?? [],
+        preflight: data.preflight,
+      });
       await refetchLeague();
     } else {
       setSchedulingWarnings([]);
@@ -587,6 +618,109 @@ export default function SchedulePage() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {/* Generation summary */}
+      {generationStats && (
+        (() => {
+          const gs = generationStats;
+          const totalByes = gs.byes.length;
+          const backToBackByes = gs.byes.filter((b) => b.backToBack).length;
+          // Games per team from the freshly generated set.
+          const gamesPerTeam = new Map<string, number>();
+          for (const t of teams) gamesPerTeam.set(t.id, 0);
+          for (const g of games) {
+            if (g.is_playoff) continue;
+            gamesPerTeam.set(g.home_team_id, (gamesPerTeam.get(g.home_team_id) || 0) + 1);
+            gamesPerTeam.set(g.away_team_id, (gamesPerTeam.get(g.away_team_id) || 0) + 1);
+          }
+          const counts = Array.from(gamesPerTeam.values());
+          const minGames = counts.length ? Math.min(...counts) : 0;
+          const maxGames = counts.length ? Math.max(...counts) : 0;
+          const avgGames = counts.length
+            ? Math.round((counts.reduce((a, b) => a + b, 0) / counts.length) * 10) / 10
+            : 0;
+          // BYEs per team
+          const byesPerTeam = new Map<string, number>();
+          for (const b of gs.byes) {
+            byesPerTeam.set(b.teamId, (byesPerTeam.get(b.teamId) || 0) + 1);
+          }
+          const maxByes = byesPerTeam.size
+            ? Math.max(...Array.from(byesPerTeam.values()))
+            : 0;
+          return (
+            <Card className="border-emerald-200 bg-emerald-50/50">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base text-emerald-800">
+                    Generation summary
+                  </CardTitle>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0 text-emerald-700"
+                    onClick={() => setGenerationStats(null)}
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="text-sm space-y-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <Stat label="Games scheduled" value={gs.count} />
+                  <Stat label="Weeks" value={gs.targetWeeks} />
+                  <Stat
+                    label="Games / team"
+                    value={
+                      minGames === maxGames
+                        ? `${minGames}`
+                        : `${minGames}–${maxGames} (avg ${avgGames})`
+                    }
+                  />
+                  <Stat
+                    label="Biggest division"
+                    value={`${gs.preflight.biggestDivisionName ?? "—"} (${gs.preflight.biggestDivisionSize})`}
+                  />
+                  <Stat label="BYE weeks" value={totalByes} />
+                  <Stat
+                    label="Back-to-back BYEs"
+                    value={backToBackByes}
+                    warn={backToBackByes > 0}
+                  />
+                  <Stat label="Max BYEs / team" value={maxByes} />
+                  <Stat
+                    label="Dropped pairs"
+                    value={gs.droppedPairs.length}
+                    warn={gs.droppedPairs.length > 0}
+                  />
+                </div>
+                <p className="text-xs text-emerald-900/70">
+                  Season length = {gs.preflight.minWeeksNeeded} weeks needed for full
+                  round-robin × {gs.preflight.matchupFrequency}, {gs.preflight.availableWeeks}{" "}
+                  available.
+                </p>
+                {gs.droppedPairs.length > 0 && (
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-emerald-900/80 hover:text-emerald-900">
+                      Show dropped pairs ({gs.droppedPairs.length})
+                    </summary>
+                    <ul className="mt-1 space-y-0.5 pl-4 list-disc">
+                      {gs.droppedPairs.slice(0, 20).map((p, i) => (
+                        <li key={i}>
+                          {teamsMap.get(p.teamA)?.name ?? p.teamA} vs{" "}
+                          {teamsMap.get(p.teamB)?.name ?? p.teamB} — {p.reason}
+                        </li>
+                      ))}
+                      {gs.droppedPairs.length > 20 && (
+                        <li>…and {gs.droppedPairs.length - 20} more</li>
+                      )}
+                    </ul>
+                  </details>
+                )}
+              </CardContent>
+            </Card>
+          );
+        })()
       )}
 
       {/* Re-seed hard block: unplayed games before regen date */}

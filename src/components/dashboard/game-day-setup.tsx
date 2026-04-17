@@ -83,10 +83,12 @@ function getUSHolidays(startDate: string, endDate: string): { date: string; labe
 function estimateGamesPerTeam(
   teamCount: number,
   matchupFrequency: number,
-  gamesPerSession: number
+  // kept for call-site compatibility; gamesPerSession affects nights needed,
+  // not season total games per team.
+  _gamesPerSession: number
 ): number {
   if (teamCount < 2) return 0;
-  return (teamCount - 1) * matchupFrequency * gamesPerSession;
+  return (teamCount - 1) * matchupFrequency;
 }
 
 // ── Props ────────────────────────────────────────────────────────────────────
