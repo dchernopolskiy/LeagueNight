@@ -175,6 +175,7 @@ export function TeamsManager({
     if (!error && data) {
       setTeams([...teams, data as Team]);
       setNewTeamName("");
+      router.refresh();
     }
     setAddingTeam(false);
   }
@@ -235,6 +236,7 @@ export function TeamsManager({
           t.id === teamId ? { ...t, captain_player_id: playerId } : t
         )
       );
+      router.refresh();
     }
   }
 
@@ -280,6 +282,7 @@ export function TeamsManager({
     const { error } = await supabase.from("teams").delete().eq("id", teamId);
     if (!error) {
       setTeams(teams.filter((t) => t.id !== teamId));
+      router.refresh();
     }
     setDroppingOutTeamId(null);
   }
@@ -297,6 +300,7 @@ export function TeamsManager({
           t.id === teamId ? { ...t, name: editingTeamName.trim() } : t
         )
       );
+      router.refresh();
     }
     setEditingTeamId(null);
     setEditingTeamName("");
@@ -327,6 +331,7 @@ export function TeamsManager({
     const { error } = await supabase.from("teams").delete().eq("id", teamId);
     if (!error) {
       setTeams(teams.filter((t) => t.id !== teamId));
+      router.refresh();
     }
     setDeletingTeamId(null);
     setMoveToSubPool(true);
