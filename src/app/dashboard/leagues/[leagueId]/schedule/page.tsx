@@ -501,10 +501,14 @@ export default function SchedulePage() {
                     const byeTeams = relevantTeams.filter((t) => !teamsPlaying.has(t.id));
                     if (byeTeams.length === 0) return null;
                     return (
-                      <div className="flex flex-wrap items-center gap-1.5 mb-2">
-                        <span className="text-xs text-muted-foreground">BYE:</span>
+                      <div className="flex flex-wrap items-start gap-1.5 mb-2">
+                        <span className="text-xs text-muted-foreground shrink-0">BYE:</span>
                         {byeTeams.map((t) => (
-                          <Badge key={t.id} variant="outline" className="text-xs text-muted-foreground">
+                          <Badge
+                            key={t.id}
+                            variant="outline"
+                            className="max-w-full whitespace-normal break-words text-xs text-muted-foreground"
+                          >
                             {t.name}
                           </Badge>
                         ))}
