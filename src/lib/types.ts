@@ -149,6 +149,7 @@ export interface GameDayPattern {
   matchup_frequency: number;
   mix_divisions: boolean;
   skip_dates: string[];
+  last_regenerated_at: string | null;
 }
 
 export interface PreferenceApplied {

@@ -30,6 +30,15 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import { generateSchedulePdf } from "@/lib/export/schedule-pdf";
+import { exportLeagueScheduleXlsx } from "@/lib/export/data-export";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { Game, LeagueSettings, Location, LocationUnavailability } from "@/lib/types";
 import { useLeagueRole } from "@/lib/league-role-context";
 import { GameDaySetupPanel } from "@/components/dashboard/game-day-setup";
@@ -62,6 +71,22 @@ export default function SchedulePage() {
 
   const [generating, setGenerating] = useState(false);
   const [schedulingWarnings, setSchedulingWarnings] = useState<string[]>([]);
+  const [preflightPrompt, setPreflightPrompt] = useState<{
+    message: string;
+    preflight: {
+      biggestDivisionName: string | null;
+      biggestDivisionSize: number;
+      minWeeksNeeded: number;
+      availableWeeks: number;
+      droppedPairCount: number;
+    };
+    retry: () => Promise<void>;
+  } | null>(null);
+  const [reseedBlock, setReseedBlock] = useState<{
+    unplayedCount: number;
+    regenerateFrom: string;
+    message: string;
+  } | null>(null);
 
   // Fetch locations separately (organizer-scoped, not league-scoped)
   const [locations, setLocations] = useState<Location[]>([]);
@@ -146,10 +171,13 @@ export default function SchedulePage() {
       skipDates: string[];
       regenerateFrom?: string;
       locationIds: string[];
-    }
+      reseedMode?: "by_skill" | "within_division";
+    },
+    acceptTruncation = false
   ) {
     setGenerating(true);
-    const res = await fetch("/api/schedule/generate", {
+    setReseedBlock(null);
+    const res = await fetch("/api/schedule/generate-v2", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -162,8 +190,32 @@ export default function SchedulePage() {
         skipDates: opts.skipDates,
         regenerateFrom: opts.regenerateFrom,
         locationIds: opts.locationIds,
+        acceptTruncation,
+        reseedMode: opts.reseedMode,
       }),
     });
+
+    if (res.status === 409) {
+      const data = await res.json();
+      if (data.error === "truncation_required") {
+        setPreflightPrompt({
+          message: data.message,
+          preflight: data.preflight,
+          retry: () => generateSchedule(patternId, opts, true),
+        });
+        setGenerating(false);
+        return;
+      }
+      if (data.error === "reseed_blocked_unplayed_games") {
+        setReseedBlock({
+          unplayedCount: data.unplayedCount,
+          regenerateFrom: data.regenerateFrom,
+          message: data.message,
+        });
+        setGenerating(false);
+        return;
+      }
+    }
 
     if (res.ok) {
       const data = await res.json();
@@ -176,13 +228,53 @@ export default function SchedulePage() {
     } else {
       setSchedulingWarnings([]);
     }
+    setPreflightPrompt(null);
     setGenerating(false);
   }
 
-  function exportSchedulePdfFn() {
+  // Half-season cutoff: most recent pattern.last_regenerated_at, falling back
+  // to the midpoint week across existing games.
+  const halfSeasonCutoff = useMemo(() => {
+    const stamps = (patterns || [])
+      .map((p) => p.last_regenerated_at)
+      .filter((s): s is string => !!s)
+      .sort();
+    if (stamps.length > 0) return new Date(stamps[stamps.length - 1]);
+    const weeks = Array.from(new Set(games.map((g) => g.week_number || 0))).sort(
+      (a, b) => a - b
+    );
+    if (weeks.length < 2) return null;
+    const midWeek = weeks[Math.floor(weeks.length / 2)];
+    // Use the earliest scheduled_at at or after midWeek as the cutoff.
+    const midGame = games
+      .filter((g) => (g.week_number || 0) >= midWeek)
+      .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())[0];
+    return midGame ? new Date(midGame.scheduled_at) : null;
+  }, [patterns, games]);
+
+  function gamesBeforeCutoff(): Game[] {
+    if (!halfSeasonCutoff) return games;
+    return games.filter((g) => new Date(g.scheduled_at) < halfSeasonCutoff);
+  }
+  function gamesAfterCutoff(): Game[] {
+    if (!halfSeasonCutoff) return [];
+    return games.filter((g) => new Date(g.scheduled_at) >= halfSeasonCutoff);
+  }
+
+  function exportPdf(filtered: Game[], suffix: string) {
     if (!league) return;
-    const doc = generateSchedulePdf({ league, teams, players, games });
-    doc.save(`${league.name} - Schedule.pdf`);
+    const doc = generateSchedulePdf({ league, teams, players, games: filtered });
+    doc.save(`${league.name}${suffix}.pdf`);
+  }
+
+  function exportXlsx(filtered: Game[], suffix: string) {
+    if (!league) return;
+    exportLeagueScheduleXlsx({
+      league,
+      teams,
+      games: filtered,
+      filename: `${league.name}${suffix}.xlsx`,
+    });
   }
 
   async function cancelGame(gameId: string) {
@@ -451,6 +543,76 @@ export default function SchedulePage() {
         </CardContent>
       </Card>
 
+      {/* Preflight truncation prompt */}
+      {preflightPrompt && (
+        <Card className="border-orange-300 bg-orange-50">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2 text-orange-800">
+              <AlertTriangle className="h-4 w-4" />
+              Season won&rsquo;t fit full round-robin
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-orange-900">{preflightPrompt.message}</p>
+            <div className="text-xs text-orange-900/80 space-y-0.5">
+              <div>
+                Biggest division: <strong>{preflightPrompt.preflight.biggestDivisionName ?? "(unnamed)"}</strong>{" "}
+                ({preflightPrompt.preflight.biggestDivisionSize} teams)
+              </div>
+              <div>
+                Needs <strong>{preflightPrompt.preflight.minWeeksNeeded}</strong> weeks; only{" "}
+                <strong>{preflightPrompt.preflight.availableWeeks}</strong> available
+              </div>
+              <div>
+                <strong>{preflightPrompt.preflight.droppedPairCount}</strong> pairing
+                {preflightPrompt.preflight.droppedPairCount === 1 ? "" : "s"} will be dropped
+              </div>
+            </div>
+            <div className="flex gap-2 pt-1">
+              <Button
+                size="sm"
+                onClick={() => void preflightPrompt.retry()}
+                disabled={generating}
+              >
+                Proceed anyway
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPreflightPrompt(null)}
+                disabled={generating}
+              >
+                Cancel
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Re-seed hard block: unplayed games before regen date */}
+      {reseedBlock && (
+        <Card className="border-red-300 bg-red-50">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2 text-red-800">
+              <AlertTriangle className="h-4 w-4" />
+              Cannot re-seed yet
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-red-900">{reseedBlock.message}</p>
+            <p className="text-xs text-red-900/80">
+              Go to the schedule below, mark those games complete (or reschedule them past{" "}
+              <strong>{reseedBlock.regenerateFrom}</strong>), then try again.
+            </p>
+            <div className="flex gap-2 pt-1">
+              <Button size="sm" variant="outline" onClick={() => setReseedBlock(null)}>
+                Dismiss
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Scheduling Warnings */}
       {schedulingWarnings.length > 0 && (
         <Card className="border-amber-200 bg-amber-50/50">
@@ -475,10 +637,55 @@ export default function SchedulePage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">Schedule</CardTitle>
-              <Button variant="outline" size="sm" onClick={exportSchedulePdfFn}>
-                <Download className="h-4 w-4 mr-1" />
-                Export PDF
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger>
+                  <Button variant="outline" size="sm">
+                    <Download className="h-4 w-4 mr-1" />
+                    Export
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel className="text-xs">Full season</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={() => exportPdf(games, " - Schedule")}>
+                    PDF
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => exportXlsx(games, " - Schedule")}>
+                    XLSX
+                  </DropdownMenuItem>
+                  {halfSeasonCutoff && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuLabel className="text-xs">
+                        First half (before {format(halfSeasonCutoff, "MMM d")})
+                      </DropdownMenuLabel>
+                      <DropdownMenuItem
+                        onClick={() => exportPdf(gamesBeforeCutoff(), " - First Half")}
+                      >
+                        PDF
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => exportXlsx(gamesBeforeCutoff(), " - First Half")}
+                      >
+                        XLSX
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuLabel className="text-xs">
+                        Second half (on/after {format(halfSeasonCutoff, "MMM d")})
+                      </DropdownMenuLabel>
+                      <DropdownMenuItem
+                        onClick={() => exportPdf(gamesAfterCutoff(), " - Second Half")}
+                      >
+                        PDF
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => exportXlsx(gamesAfterCutoff(), " - Second Half")}
+                      >
+                        XLSX
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </CardHeader>
           <CardContent>

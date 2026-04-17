@@ -19,10 +19,13 @@ import { format } from "date-fns";
 import { Download, Pencil } from "lucide-react";
 import { generateStandingsPdf } from "@/lib/export/standings-pdf";
 import type { Game, Team, Standing, League, LeagueSettings } from "@/lib/types";
+import { useLeagueRole } from "@/lib/league-role-context";
+import { computeTeamWeights } from "@/lib/standings/weights";
 
 export default function StandingsPage() {
   const { leagueId } = useParams<{ leagueId: string }>();
   const searchParams = useSearchParams();
+  const { canManage } = useLeagueRole();
   const activeDivisionId = searchParams.get("division");
   const [games, setGames] = useState<Game[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -201,6 +204,8 @@ export default function StandingsPage() {
       )
     : games;
 
+  const teamWeights = computeTeamWeights(standings, settings);
+
   const scheduledGames = filteredGames.filter((g) => g.status === "scheduled");
   const completedGames = filteredGames.filter((g) => g.status === "completed");
 
@@ -240,26 +245,42 @@ export default function StandingsPage() {
                   <TableHead className="text-center">PF</TableHead>
                   <TableHead className="text-center">PA</TableHead>
                   <TableHead className="text-center">PD</TableHead>
+                  {canManage && (
+                    <TableHead
+                      className="text-center"
+                      title="Skill weight used for mid-season re-seeding. 0.7 × set win rate + 0.3 × match win rate (sets mode), or 0.7 × match win rate + 0.3 × point ratio (game mode)."
+                    >
+                      Weight
+                    </TableHead>
+                  )}
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredStandings.map((s) => (
-                  <TableRow key={s.id}>
-                    <TableCell className="font-medium">{s.rank}</TableCell>
-                    <TableCell>{teamsMap.get(s.team_id)?.name}</TableCell>
-                    <TableCell className="text-center">{s.wins}</TableCell>
-                    <TableCell className="text-center">{s.losses}</TableCell>
-                    <TableCell className="text-center">{s.ties}</TableCell>
-                    <TableCell className="text-center">{s.points_for}</TableCell>
-                    <TableCell className="text-center">
-                      {s.points_against}
-                    </TableCell>
-                    <TableCell className="text-center">
-                      {s.points_for - s.points_against > 0 ? "+" : ""}
-                      {s.points_for - s.points_against}
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {filteredStandings.map((s) => {
+                  const w = teamWeights.get(s.team_id);
+                  return (
+                    <TableRow key={s.id}>
+                      <TableCell className="font-medium">{s.rank}</TableCell>
+                      <TableCell>{teamsMap.get(s.team_id)?.name}</TableCell>
+                      <TableCell className="text-center">{s.wins}</TableCell>
+                      <TableCell className="text-center">{s.losses}</TableCell>
+                      <TableCell className="text-center">{s.ties}</TableCell>
+                      <TableCell className="text-center">{s.points_for}</TableCell>
+                      <TableCell className="text-center">
+                        {s.points_against}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {s.points_for - s.points_against > 0 ? "+" : ""}
+                        {s.points_for - s.points_against}
+                      </TableCell>
+                      {canManage && (
+                        <TableCell className="text-center font-mono text-xs">
+                          {w ? w.weight.toFixed(3) : "—"}
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}

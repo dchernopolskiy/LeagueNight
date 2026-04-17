@@ -112,6 +112,7 @@ interface Props {
       skipDates: string[];
       regenerateFrom?: string;
       locationIds: string[];
+      reseedMode?: "by_skill" | "within_division";
     }
   ) => Promise<void>;
 }
@@ -710,6 +711,7 @@ export function GameDaySetupPanel({
   function PatternGroupCard({ groupKey, groupPatterns }: { groupKey: string; groupPatterns: GameDayPattern[] }) {
     const [showRegenFrom, setShowRegenFrom] = useState(false);
     const [regenFrom, setRegenFrom] = useState("");
+    const [useReseed, setUseReseed] = useState(true);
     const first = groupPatterns[0];
     const dayLabels = groupPatterns.map((p) => DAY_FULL[p.day_of_week]).join(" & ");
     const locNames = (first.location_ids || []).map((id) => locationsMap.get(id)?.name).filter(Boolean).join(", ") || first.venue || "No location";
@@ -807,36 +809,48 @@ export function GameDaySetupPanel({
               Regenerate from…
             </button>
             {showRegenFrom && (
-              <div className="flex items-center gap-1.5 w-full">
-                <Input
-                  type="date"
-                  value={regenFrom}
-                  onChange={(e) => setRegenFrom(e.target.value)}
-                  className="h-7 text-xs w-36"
-                />
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-xs"
-                  disabled={!regenFrom || generating}
-                  onClick={async () => {
-                    for (const p of groupPatterns) {
-                      await onGenerate(p.id, {
-                        gamesPerTeam: p.games_per_team,
-                        gamesPerSession: p.games_per_session,
-                        matchupFrequency: p.matchup_frequency,
-                        mixDivisions: p.mix_divisions,
-                        skipDates: p.skip_dates,
-                        regenerateFrom: regenFrom,
-                        locationIds: p.location_ids,
-                      });
-                    }
-                    setRegenFrom("");
-                    setShowRegenFrom(false);
-                  }}
-                >
-                  Apply
-                </Button>
+              <div className="flex flex-col gap-1.5 w-full">
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    type="date"
+                    value={regenFrom}
+                    onChange={(e) => setRegenFrom(e.target.value)}
+                    className="h-7 text-xs w-36"
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    disabled={!regenFrom || generating}
+                    onClick={async () => {
+                      for (const p of groupPatterns) {
+                        await onGenerate(p.id, {
+                          gamesPerTeam: p.games_per_team,
+                          gamesPerSession: p.games_per_session,
+                          matchupFrequency: p.matchup_frequency,
+                          mixDivisions: p.mix_divisions,
+                          skipDates: p.skip_dates,
+                          regenerateFrom: regenFrom,
+                          locationIds: p.location_ids,
+                          reseedMode: useReseed ? "by_skill" : undefined,
+                        });
+                      }
+                      setRegenFrom("");
+                      setShowRegenFrom(false);
+                    }}
+                  >
+                    Apply
+                  </Button>
+                </div>
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={useReseed}
+                    onChange={(e) => setUseReseed(e.target.checked)}
+                    className="h-3 w-3"
+                  />
+                  Re-pool teams based on skill results (standings)
+                </label>
               </div>
             )}
           </div>

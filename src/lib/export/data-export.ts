@@ -267,6 +267,40 @@ export function exportFullSchedule(
 }
 
 // ---------------------------------------------------------------------------
+// 3b. Single-league schedule export (XLSX) — used by league schedule page
+// ---------------------------------------------------------------------------
+
+interface LeagueScheduleInput {
+  league: League;
+  teams: Team[];
+  games: Game[];
+  filename: string;
+}
+
+export function exportLeagueScheduleXlsx({ league, teams, games, filename }: LeagueScheduleInput) {
+  const teamMap = new Map(teams.map((t) => [t.id, t]));
+  const sorted = [...games].sort(
+    (a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime()
+  );
+  const rows = sorted.map((g) => ({
+    Week: g.week_number ?? "",
+    Date: fmtDateTime(g.scheduled_at),
+    "Home Team": teamMap.get(g.home_team_id)?.name ?? "",
+    "Away Team": teamMap.get(g.away_team_id)?.name ?? "",
+    "Home Score": g.home_score != null ? g.home_score : "",
+    "Away Score": g.away_score != null ? g.away_score : "",
+    Venue: g.venue ?? "",
+    Court: g.court ?? "",
+    Status: g.status,
+  }));
+  const wb = XLSX.utils.book_new();
+  const ws = buildSheet(rows, "Schedule");
+  XLSX.utils.book_append_sheet(wb, ws, league.name.slice(0, 28) || "Schedule");
+  XLSX.utils.sheet_add_aoa(ws, [[generatedLine()]], { origin: -1 });
+  saveXlsx(wb, filename);
+}
+
+// ---------------------------------------------------------------------------
 // 4. Per-League Export (selected sections)
 // ---------------------------------------------------------------------------
 
