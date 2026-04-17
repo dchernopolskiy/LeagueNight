@@ -17,7 +17,9 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -694,23 +696,19 @@ export function TeamsManager({
                             );
                             if (divTeams.length === 0) return null;
                             return (
-                              <div key={div.id}>
-                                <p className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                                  {div.name}
-                                </p>
+                              <SelectGroup key={div.id}>
+                                <SelectLabel>{div.name}</SelectLabel>
                                 {divTeams.map((t) => (
                                   <SelectItem key={t.id} value={t.id}>
                                     {t.name}
                                   </SelectItem>
                                 ))}
-                              </div>
+                              </SelectGroup>
                             );
                           })}
                           {teams.filter((t) => !t.division_id).length > 0 && (
-                            <div>
-                              <p className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                                No division
-                              </p>
+                            <SelectGroup>
+                              <SelectLabel>No division</SelectLabel>
                               {teams
                                 .filter((t) => !t.division_id)
                                 .map((t) => (
@@ -718,7 +716,7 @@ export function TeamsManager({
                                     {t.name}
                                   </SelectItem>
                                 ))}
-                            </div>
+                            </SelectGroup>
                           )}
                         </>
                       ) : (

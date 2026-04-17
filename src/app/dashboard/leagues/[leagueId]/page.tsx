@@ -35,6 +35,8 @@ import {
   ArchiveRestore,
   OctagonX,
   Check,
+  Pencil,
+  X,
 } from "lucide-react";
 import type { LeagueStaff } from "@/lib/types";
 import { useLeagueData } from "@/lib/hooks";
@@ -86,6 +88,10 @@ export default function LeagueOverviewPage() {
   const [newDivName, setNewDivName] = useState("");
   const [newDivLevel, setNewDivLevel] = useState("1");
   const [addingDiv, setAddingDiv] = useState(false);
+  const [editingDivId, setEditingDivId] = useState<string | null>(null);
+  const [editingDivName, setEditingDivName] = useState("");
+  const [editingDivLevel, setEditingDivLevel] = useState("1");
+  const [savingDiv, setSavingDiv] = useState(false);
 
   // Cross-division play state
   const [selectedDivisionA, setSelectedDivisionA] = useState<string>("");
@@ -201,6 +207,21 @@ export default function LeagueOverviewPage() {
     if (!error) {
       await refetch();
     }
+  }
+
+  async function saveDivision() {
+    if (!editingDivId || !editingDivName.trim()) return;
+    setSavingDiv(true);
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("divisions")
+      .update({ name: editingDivName.trim(), level: parseInt(editingDivLevel) || 1 })
+      .eq("id", editingDivId);
+    if (!error) {
+      setEditingDivId(null);
+      await refetch();
+    }
+    setSavingDiv(false);
   }
 
   async function addCrossPlayRule() {
@@ -729,22 +750,71 @@ export default function LeagueOverviewPage() {
                 ) : (
                   <ul className="space-y-2">
                     {divisions.map((div) => (
-                      <li
-                        key={div.id}
-                        className="flex items-center justify-between rounded-md border px-3 py-2 hover:bg-accent/50 transition-colors"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium">{div.name}</span>
-                          <Badge variant="secondary">Level {div.level}</Badge>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                          onClick={() => deleteDivision(div.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                      <li key={div.id} className="rounded-md border">
+                        {editingDivId === div.id ? (
+                          <div className="flex items-center gap-2 px-3 py-2">
+                            <Input
+                              value={editingDivName}
+                              onChange={(e) => setEditingDivName(e.target.value)}
+                              onKeyDown={(e) => e.key === "Enter" && saveDivision()}
+                              className="flex-1 h-7 text-sm"
+                              autoFocus
+                            />
+                            <Input
+                              type="number"
+                              min={1}
+                              value={editingDivLevel}
+                              onChange={(e) => setEditingDivLevel(e.target.value)}
+                              className="w-16 h-7 text-sm"
+                            />
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 w-7 p-0 text-green-600 hover:text-green-700"
+                              onClick={saveDivision}
+                              disabled={savingDiv || !editingDivName.trim()}
+                            >
+                              <Check className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 w-7 p-0 text-muted-foreground"
+                              onClick={() => setEditingDivId(null)}
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between px-3 py-2 hover:bg-accent/50 transition-colors">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium">{div.name}</span>
+                              <Badge variant="secondary">Level {div.level}</Badge>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                                onClick={() => {
+                                  setEditingDivId(div.id);
+                                  setEditingDivName(div.name);
+                                  setEditingDivLevel(String(div.level));
+                                }}
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                                onClick={() => deleteDivision(div.id)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </div>
+                        )}
                       </li>
                     ))}
                   </ul>
