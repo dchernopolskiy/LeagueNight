@@ -311,6 +311,7 @@ function drawWeekBlock({
   y,
   width,
   teamNumbers,
+  allTeams,
 }: {
   doc: jsPDF;
   weekNumber: number;
@@ -319,6 +320,7 @@ function drawWeekBlock({
   y: number;
   width: number;
   teamNumbers: Map<string, string>;
+  allTeams: Team[];
 }): number {
   const locationGroups = new Map<string, Game[]>();
   const timeSlots = [
@@ -335,6 +337,7 @@ function drawWeekBlock({
 
   const tableRows: string[][] = [];
   const locationRowIndexes = new Set<number>();
+  let byeRowIndex = -1;
 
   for (const [location, locationGames] of locationGroups) {
     locationRowIndexes.add(tableRows.length);
@@ -357,6 +360,15 @@ function drawWeekBlock({
 
       tableRows.push(row);
     }
+  }
+
+  // BYE row: teams not playing this week
+  const playingTeamIds = new Set(weekGames.flatMap((g) => [g.home_team_id, g.away_team_id]));
+  const byeTeams = allTeams.filter((t) => !playingTeamIds.has(t.id));
+  if (byeTeams.length > 0) {
+    byeRowIndex = tableRows.length;
+    const byeNames = byeTeams.map((t) => `${teamNumbers.get(t.id) ?? "?"} ${t.name}`).join("  ·  ");
+    tableRows.push(["BYE", byeNames, ...timeSlots.slice(1).map(() => "")]);
   }
 
   const firstDate = weekGames[0] ? format(new Date(weekGames[0].scheduled_at), "MMM d") : "";
@@ -397,6 +409,19 @@ function drawWeekBlock({
         data.cell.styles.fontStyle = "bold";
         data.cell.styles.textColor = BRAND.slate;
         data.cell.styles.fontSize = 5.8;
+      }
+      if (data.row.index === byeRowIndex) {
+        data.cell.styles.fillColor = [255, 248, 220];
+        data.cell.styles.textColor = [120, 80, 10];
+        if (data.column.index === 0) {
+          data.cell.styles.fontStyle = "bold";
+          data.cell.styles.fontSize = 6;
+        } else if (data.column.index === 1) {
+          data.cell.styles.fontSize = 6;
+          data.cell.styles.fontStyle = "normal";
+        } else {
+          data.cell.styles.fillColor = [255, 248, 220];
+        }
       }
     },
     margin: { left: x, right: doc.internal.pageSize.getWidth() - x - width },
@@ -488,6 +513,7 @@ export function generateSchedulePdf({
           y: currentY,
           width: blockWidth,
           teamNumbers,
+          allTeams: teams,
         });
 
         rowHeight = Math.max(rowHeight, height);

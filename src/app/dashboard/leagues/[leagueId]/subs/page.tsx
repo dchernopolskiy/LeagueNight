@@ -47,6 +47,7 @@ export default function SubsPage() {
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
   const [addToTeamDialogOpen, setAddToTeamDialogOpen] = useState(false);
   const [selectedSub, setSelectedSub] = useState<Player | null>(null);
+  const [selectedTeamId, setSelectedTeamId] = useState<string>("");
 
   // Form state
   const [formData, setFormData] = useState({
@@ -140,15 +141,14 @@ export default function SubsPage() {
     }
   }
 
-  async function handleAddToTeam(teamId: string | null) {
-    if (!teamId) return;
-    if (!selectedSub) return;
+  async function handleAddToTeam() {
+    if (!selectedTeamId || !selectedSub) return;
 
     const supabase = createClient();
     const { error } = await supabase
       .from("players")
       .update({
-        team_id: teamId,
+        team_id: selectedTeamId,
         is_sub: false,
       })
       .eq("id", selectedSub.id);
@@ -156,6 +156,7 @@ export default function SubsPage() {
     if (!error) {
       setAddToTeamDialogOpen(false);
       setSelectedSub(null);
+      setSelectedTeamId("");
       await loadData();
     }
   }
@@ -508,7 +509,7 @@ export default function SubsPage() {
       </Dialog>
 
       {/* Add to Team Dialog */}
-      <Dialog open={addToTeamDialogOpen} onOpenChange={setAddToTeamDialogOpen}>
+      <Dialog open={addToTeamDialogOpen} onOpenChange={(open) => { setAddToTeamDialogOpen(open); if (!open) setSelectedTeamId(""); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add {selectedSub?.name} to a team</DialogTitle>
@@ -517,7 +518,7 @@ export default function SubsPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <Select onValueChange={handleAddToTeam}>
+            <Select value={selectedTeamId} onValueChange={(v) => v && setSelectedTeamId(v)}>
               <SelectTrigger>
                 <SelectValue placeholder="Select a team" />
               </SelectTrigger>
@@ -531,8 +532,11 @@ export default function SubsPage() {
             </Select>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAddToTeamDialogOpen(false)}>
+            <Button variant="outline" onClick={() => { setAddToTeamDialogOpen(false); setSelectedTeamId(""); }}>
               Cancel
+            </Button>
+            <Button onClick={handleAddToTeam} disabled={!selectedTeamId}>
+              Add to Team
             </Button>
           </DialogFooter>
         </DialogContent>

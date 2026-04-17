@@ -177,7 +177,6 @@ export function TeamsManager({
     if (!error && data) {
       setTeams([...teams, data as Team]);
       setNewTeamName("");
-      router.refresh();
     }
     setAddingTeam(false);
   }

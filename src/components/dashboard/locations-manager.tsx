@@ -91,6 +91,7 @@ export function LocationsManager({
   const [unavailReason, setUnavailReason] = useState<Record<string, string>>(
     {}
   );
+  const [showPastUnavail, setShowPastUnavail] = useState<Record<string, boolean>>({});
 
   const leaguesMap = new Map(leagues.map((l) => [l.id, l]));
 
@@ -471,6 +472,15 @@ export function LocationsManager({
                 a.unavailable_date.localeCompare(b.unavailable_date)
               );
 
+            const locUnavailPast = unavailability
+              .filter(
+                (u) =>
+                  u.location_id === loc.id && u.unavailable_date < today
+              )
+              .sort((a, b) =>
+                b.unavailable_date.localeCompare(a.unavailable_date)
+              );
+
             const locConflicts = conflicts.get(loc.id) || [];
 
             return (
@@ -611,6 +621,45 @@ export function LocationsManager({
                         Add
                       </Button>
                     </div>
+
+                    {locUnavailPast.length > 0 && (
+                      <div className="pt-1">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowPastUnavail((prev) => ({
+                              ...prev,
+                              [loc.id]: !prev[loc.id],
+                            }))
+                          }
+                          className="text-xs text-muted-foreground hover:text-foreground underline"
+                        >
+                          {showPastUnavail[loc.id] ? "Hide" : "Show"} past ({locUnavailPast.length})
+                        </button>
+                        {showPastUnavail[loc.id] && (
+                          <div className="flex flex-wrap gap-1.5 mt-1.5">
+                            {locUnavailPast.map((u) => (
+                              <Badge
+                                key={u.id}
+                                variant="outline"
+                                className="gap-1 text-xs text-muted-foreground"
+                              >
+                                {u.unavailable_date}
+                                {u.reason && (
+                                  <span>({u.reason})</span>
+                                )}
+                                <button
+                                  onClick={() => removeUnavailability(u.id)}
+                                  className="ml-0.5 hover:text-destructive"
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* Conflict alerts */}

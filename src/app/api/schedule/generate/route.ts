@@ -419,26 +419,39 @@ export async function POST(request: NextRequest) {
 
     for (const [dateStr, dateGames] of gamesByDate) {
       const unavailOnDate = unavailByDate.get(dateStr) || new Set<string>();
-      // Filter court slots to only available locations on this date
       const availableSlots = courtSlots.filter(s => !unavailOnDate.has(s.locationId));
       const slotsToUse = availableSlots.length > 0 ? availableSlots : courtSlots;
 
-      for (let i = 0; i < dateGames.length; i++) {
-        const g = dateGames[i];
-        const slot = slotsToUse[i % slotsToUse.length];
-        gamesToInsert.push({
-          league_id: leagueId,
-          home_team_id: g.home,
-          away_team_id: g.away,
-          scheduled_at: localToUTCISO(g.scheduledAt, timezone),
-          venue: slot.locationName,
-          court: slot.totalCourts > 1 ? `Court ${slot.courtNum}` : null,
-          week_number: g.weekNumber,
-          status: "scheduled",
-          location_id: slot.locationId,
-          preference_applied: g.preferenceApplied || null,
-          scheduling_notes: g.schedulingNotes || null,
-        });
+      // Group games by timestamp so each time-slot distributes evenly across
+      // all locations' courts, instead of relying on arrival order.
+      const gamesByTime = new Map<number, typeof dateGames>();
+      for (const g of dateGames) {
+        const key = g.scheduledAt.getTime();
+        const arr = gamesByTime.get(key) || [];
+        arr.push(g);
+        gamesByTime.set(key, arr);
+      }
+      const sortedTimes = Array.from(gamesByTime.keys()).sort((a, b) => a - b);
+
+      for (const t of sortedTimes) {
+        const group = gamesByTime.get(t)!;
+        for (let i = 0; i < group.length; i++) {
+          const g = group[i];
+          const slot = slotsToUse[i % slotsToUse.length];
+          gamesToInsert.push({
+            league_id: leagueId,
+            home_team_id: g.home,
+            away_team_id: g.away,
+            scheduled_at: localToUTCISO(g.scheduledAt, timezone),
+            venue: slot.locationName,
+            court: slot.totalCourts > 1 ? `Court ${slot.courtNum}` : null,
+            week_number: g.weekNumber,
+            status: "scheduled",
+            location_id: slot.locationId,
+            preference_applied: g.preferenceApplied || null,
+            scheduling_notes: g.schedulingNotes || null,
+          });
+        }
       }
     }
   } else {

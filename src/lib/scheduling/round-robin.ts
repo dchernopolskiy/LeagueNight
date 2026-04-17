@@ -292,14 +292,17 @@ export function assignDatesWithPreferences(
       dayMatchups.push(...(rounds.get(roundNum) || []));
     }
 
-    // Build available time slots for this day
+    // Build all available time slots for this day up to end_time.
+    // Fill the full capacity — the greedy assigner needs slack for
+    // preference scoring and team-conflict avoidance; building only
+    // enough slots for the matchup count starves the assigner.
     const availableSlots: Array<{ time: Date; slotIndex: number }> = [];
     let slotIndex = 0;
+    const maxSlots = endMinutesFromMidnight !== null ? 1000 : dayMatchups.length;
 
-    while (true) {
+    while (slotIndex < maxSlots) {
       const timeSlotOffset = Math.floor(slotIndex / courtCount) * durationMinutes;
 
-      // Check if slot exceeds end_time
       if (endMinutesFromMidnight !== null) {
         const slotStartMinutes = hours * 60 + minutes + timeSlotOffset;
         if (slotStartMinutes >= endMinutesFromMidnight) break;
@@ -309,9 +312,6 @@ export function assignDatesWithPreferences(
       gameTime.setMinutes(gameTime.getMinutes() + timeSlotOffset);
       availableSlots.push({ time: gameTime, slotIndex });
       slotIndex++;
-
-      // Stop when we have enough slots for all matchups
-      if (availableSlots.length >= dayMatchups.length) break;
     }
 
     // Categorize slots as early/late
