@@ -160,14 +160,7 @@ function drawSummaryCards(
   }
 }
 
-function drawSectionTitle(doc: jsPDF, title: string, y: number, eyebrow?: string) {
-  if (eyebrow) {
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(7);
-    textColor(doc, BRAND.gold);
-    doc.text(eyebrow.toUpperCase(), MARGIN_X, y - 12);
-  }
-
+function drawSectionTitle(doc: jsPDF, title: string, y: number) {
   doc.setFont("helvetica", "bold");
   doc.setFontSize(13);
   textColor(doc, BRAND.ink);
@@ -193,8 +186,8 @@ function drawTeamKey(
     })
   );
 
-  drawSectionTitle(doc, "Team Key", y, "Use these numbers in schedule notes");
-  y += 24;
+  drawSectionTitle(doc, "Team Key", y);
+  y += 22;
 
   const columns = teams.length > 12 ? 4 : 3;
   const gap = 10;
@@ -258,13 +251,24 @@ function drawFooter(doc: jsPDF, pageNumber: number, pageCount: number) {
   });
 }
 
-function getMatchupLabel(game: Game, teamMap: Map<string, Team>, teamNumbers: Map<string, string>) {
-  const home = teamMap.get(game.home_team_id);
-  const away = teamMap.get(game.away_team_id);
+function drawPageBackground(doc: jsPDF) {
+  fillColor(doc, BRAND.paper);
+  doc.rect(0, 0, doc.internal.pageSize.getWidth(), doc.internal.pageSize.getHeight(), "F");
+}
+
+function getCompactMatchup(game: Game, teamNumbers: Map<string, string>) {
   const homeNumber = teamNumbers.get(game.home_team_id) || "??";
   const awayNumber = teamNumbers.get(game.away_team_id) || "??";
 
-  return `${homeNumber} ${home?.name || "TBD"} vs ${awayNumber} ${away?.name || "TBD"}`;
+  return `${homeNumber} v ${awayNumber}`;
+}
+
+function getLocationLabel(game: Game) {
+  return game.venue || "Location TBD";
+}
+
+function getCourtLabel(game: Game) {
+  return game.court || "Court";
 }
 
 function formatGameStatus(game: Game): string {
@@ -279,6 +283,128 @@ function formatGameStatus(game: Game): string {
   return "Scheduled";
 }
 
+function drawCompactScheduleHeader(doc: jsPDF, league: League, games: Game[]) {
+  const pageWidth = doc.internal.pageSize.getWidth();
+
+  fillColor(doc, BRAND.navy);
+  doc.roundedRect(MARGIN_X, 32, pageWidth - MARGIN_X * 2, 38, 9, 9, "F");
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  textColor(doc, [255, 252, 245]);
+  doc.text("Compact Schedule", MARGIN_X + 16, 55);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  textColor(doc, [218, 226, 232]);
+  doc.text(`${league.name}  |  ${getDateSpan(games)}`, pageWidth - MARGIN_X - 16, 55, {
+    align: "right",
+  });
+}
+
+function drawWeekBlock({
+  doc,
+  weekNumber,
+  weekGames,
+  x,
+  y,
+  width,
+  teamNumbers,
+}: {
+  doc: jsPDF;
+  weekNumber: number;
+  weekGames: Game[];
+  x: number;
+  y: number;
+  width: number;
+  teamNumbers: Map<string, string>;
+}): number {
+  fillColor(doc, BRAND.navy);
+  doc.roundedRect(x, y, width, 24, 7, 7, "F");
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.8);
+  textColor(doc, [255, 252, 245]);
+  doc.text(`WEEK ${weekNumber || "-"}`, x + 10, y + 16);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7);
+  textColor(doc, [218, 226, 232]);
+  doc.text(getDateSpan(weekGames), x + width - 10, y + 16, { align: "right" });
+
+  let cursorY = y + 29;
+  const locationGroups = new Map<string, Game[]>();
+
+  for (const game of weekGames) {
+    const location = getLocationLabel(game);
+    locationGroups.set(location, [...(locationGroups.get(location) || []), game]);
+  }
+
+  for (const [location, locationGames] of locationGroups) {
+    fillColor(doc, BRAND.panel);
+    doc.roundedRect(x, cursorY, width, 15, 4, 4, "F");
+    doc.setDrawColor(BRAND.line[0], BRAND.line[1], BRAND.line[2]);
+    doc.roundedRect(x, cursorY, width, 15, 4, 4, "S");
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(6.8);
+    textColor(doc, BRAND.blue);
+    doc.text(location.toUpperCase(), x + 7, cursorY + 10);
+
+    const tableRows = locationGames.map((game) => {
+      const date = new Date(game.scheduled_at);
+      const status = formatGameStatus(game);
+      return [
+        format(date, "EEE M/d"),
+        format(date, "h:mm a"),
+        getCourtLabel(game),
+        getCompactMatchup(game, teamNumbers),
+        status === "Scheduled" ? "" : status,
+      ];
+    });
+
+    autoTable(doc, {
+      startY: cursorY + 17,
+      head: [["Date", "Time", "Court", "Game", "Note"]],
+      body: tableRows,
+      theme: "grid",
+      headStyles: {
+        fillColor: BRAND.gold,
+        textColor: BRAND.ink,
+        fontStyle: "bold",
+        fontSize: 6.4,
+        cellPadding: { top: 2.5, right: 3, bottom: 2.5, left: 3 },
+        lineColor: BRAND.gold,
+      },
+      bodyStyles: {
+        fontSize: 6.6,
+        textColor: BRAND.ink,
+        cellPadding: { top: 2.5, right: 3, bottom: 2.5, left: 3 },
+        lineColor: BRAND.line,
+        lineWidth: 0.3,
+      },
+      alternateRowStyles: {
+        fillColor: [252, 249, 242],
+      },
+      columnStyles: {
+        0: { cellWidth: 48 },
+        1: { cellWidth: 48 },
+        2: { cellWidth: 58 },
+        3: { cellWidth: 54, halign: "center", fontStyle: "bold" },
+        4: { cellWidth: width - 208 },
+      },
+      margin: { left: x, right: doc.internal.pageSize.getWidth() - x - width },
+      tableWidth: width,
+      pageBreak: "avoid",
+      rowPageBreak: "avoid",
+    });
+
+    cursorY = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 7;
+  }
+
+  return cursorY - y;
+}
+
 export function generateSchedulePdf({
   league,
   teams,
@@ -288,7 +414,6 @@ export function generateSchedulePdf({
   const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "letter" });
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
-  const teamMap = new Map(teams.map((team) => [team.id, team]));
   const teamNumbers = new Map(teams.map((team, index) => [team.id, teamNumber(index)]));
   const activeGames = games
     .filter((game) => game.status !== "cancelled")
@@ -302,24 +427,14 @@ export function generateSchedulePdf({
 
   const sortedWeeks = [...gamesByWeek.keys()].sort((a, b) => a - b);
 
-  fillColor(doc, BRAND.paper);
-  doc.rect(0, 0, pageWidth, pageHeight, "F");
+  drawPageBackground(doc);
   drawHero(doc, league, activeGames);
   drawSummaryCards(doc, { teams, games: activeGames, weeks: sortedWeeks });
 
-  let currentY = drawTeamKey(doc, teams, players, 184);
-
-  if (currentY > pageHeight - 120) {
-    doc.addPage();
-    fillColor(doc, BRAND.paper);
-    doc.rect(0, 0, pageWidth, pageHeight, "F");
-    currentY = 52;
-  }
-
-  drawSectionTitle(doc, "Week-by-Week Schedule", currentY, "Full names for game-day clarity");
-  currentY += 24;
+  drawTeamKey(doc, teams, players, 184);
 
   if (activeGames.length === 0) {
+    const currentY = 430;
     fillColor(doc, BRAND.panel);
     doc.roundedRect(MARGIN_X, currentY, pageWidth - MARGIN_X * 2, 70, 10, 10, "F");
     doc.setDrawColor(BRAND.line[0], BRAND.line[1], BRAND.line[2]);
@@ -334,85 +449,49 @@ export function generateSchedulePdf({
     doc.text("Generate or add games, then export again.", pageWidth / 2, currentY + 51, {
       align: "center",
     });
-  }
+  } else {
+    doc.addPage();
+    drawPageBackground(doc);
+    drawCompactScheduleHeader(doc, league, activeGames);
 
-  for (const weekNumber of sortedWeeks) {
-    const weekGames = gamesByWeek.get(weekNumber) || [];
-    const tableRows = weekGames.map((game, index) => {
-      const date = new Date(game.scheduled_at);
-      const location = [game.venue, game.court].filter(Boolean).join(" - ") || "TBD";
+    const weeksPerRow = 2;
+    const gapX = 16;
+    const blockWidth = (pageWidth - MARGIN_X * 2 - gapX) / weeksPerRow;
+    let currentY = 88;
 
-      return [
-        (index + 1).toString(),
-        format(date, "EEE, MMM d"),
-        format(date, "h:mm a"),
-        location,
-        getMatchupLabel(game, teamMap, teamNumbers),
-        formatGameStatus(game),
-      ];
-    });
+    for (let weekIndex = 0; weekIndex < sortedWeeks.length; weekIndex += weeksPerRow) {
+      if (currentY > pageHeight - FOOTER_HEIGHT - 92) {
+        doc.addPage();
+        drawPageBackground(doc);
+        drawCompactScheduleHeader(doc, league, activeGames);
+        currentY = 88;
+      }
 
-    const estimatedHeight = 56 + tableRows.length * 24;
-    if (currentY + estimatedHeight > pageHeight - FOOTER_HEIGHT - 16) {
-      doc.addPage();
-      fillColor(doc, BRAND.paper);
-      doc.rect(0, 0, pageWidth, pageHeight, "F");
-      currentY = 46;
+      let rowHeight = 0;
+
+      for (
+        let column = 0;
+        column < weeksPerRow && weekIndex + column < sortedWeeks.length;
+        column++
+      ) {
+        const weekNumber = sortedWeeks[weekIndex + column];
+        const weekGames = gamesByWeek.get(weekNumber) || [];
+        const x = MARGIN_X + column * (blockWidth + gapX);
+        const height = drawWeekBlock({
+          doc,
+          weekNumber,
+          weekGames,
+          x,
+          y: currentY,
+          width: blockWidth,
+          teamNumbers,
+        });
+
+        rowHeight = Math.max(rowHeight, height);
+      }
+
+      currentY += rowHeight + 16;
     }
-
-    fillColor(doc, BRAND.navy);
-    doc.roundedRect(MARGIN_X, currentY, pageWidth - MARGIN_X * 2, 30, 8, 8, "F");
-
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(11);
-    textColor(doc, [255, 252, 245]);
-    doc.text(`WEEK ${weekNumber || "-"}`, MARGIN_X + 16, currentY + 20);
-
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    textColor(doc, [218, 226, 232]);
-    doc.text(getDateSpan(weekGames), pageWidth - MARGIN_X - 16, currentY + 20, {
-      align: "right",
-    });
-
-    autoTable(doc, {
-      startY: currentY + 36,
-      head: [["#", "Date", "Time", "Court / Venue", "Matchup", "Status"]],
-      body: tableRows,
-      theme: "grid",
-      headStyles: {
-        fillColor: BRAND.gold,
-        textColor: BRAND.ink,
-        fontStyle: "bold",
-        fontSize: 8,
-        cellPadding: { top: 6, right: 7, bottom: 6, left: 7 },
-        lineColor: BRAND.gold,
-      },
-      bodyStyles: {
-        fontSize: 8.5,
-        textColor: BRAND.ink,
-        cellPadding: { top: 6, right: 7, bottom: 6, left: 7 },
-        lineColor: BRAND.line,
-        lineWidth: 0.4,
-      },
-      alternateRowStyles: {
-        fillColor: [252, 249, 242],
-      },
-      columnStyles: {
-        0: { cellWidth: 28, halign: "center", fontStyle: "bold" },
-        1: { cellWidth: 86 },
-        2: { cellWidth: 64 },
-        3: { cellWidth: 126 },
-        4: { cellWidth: 315, fontStyle: "bold" },
-        5: { cellWidth: 80, halign: "center" },
-      },
-      margin: { left: MARGIN_X, right: MARGIN_X, bottom: FOOTER_HEIGHT + 10 },
-      tableWidth: pageWidth - MARGIN_X * 2,
-    });
-
-    const finalY = (doc as unknown as { lastAutoTable: { finalY: number } })
-      .lastAutoTable.finalY;
-    currentY = finalY + 18;
   }
 
   const pageCount = doc.getNumberOfPages();
