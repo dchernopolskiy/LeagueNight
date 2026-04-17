@@ -286,18 +286,19 @@ function formatGameStatus(game: Game): string {
 function drawCompactScheduleHeader(doc: jsPDF, league: League, games: Game[]) {
   const pageWidth = doc.internal.pageSize.getWidth();
 
-  fillColor(doc, BRAND.navy);
-  doc.roundedRect(MARGIN_X, 32, pageWidth - MARGIN_X * 2, 38, 9, 9, "F");
+  doc.setDrawColor(BRAND.line[0], BRAND.line[1], BRAND.line[2]);
+  doc.setLineWidth(0.8);
+  doc.line(MARGIN_X, 42, pageWidth - MARGIN_X, 42);
 
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(13);
-  textColor(doc, [255, 252, 245]);
-  doc.text("Compact Schedule", MARGIN_X + 16, 55);
+  doc.setFontSize(10);
+  textColor(doc, BRAND.ink);
+  doc.text("Compact Schedule", MARGIN_X, 35);
 
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(8);
-  textColor(doc, [218, 226, 232]);
-  doc.text(`${league.name}  |  ${getDateSpan(games)}`, pageWidth - MARGIN_X - 16, 55, {
+  doc.setFontSize(7);
+  textColor(doc, BRAND.slate);
+  doc.text(`${league.name}  |  ${getDateSpan(games)}`, pageWidth - MARGIN_X, 35, {
     align: "right",
   });
 }
@@ -319,90 +320,92 @@ function drawWeekBlock({
   width: number;
   teamNumbers: Map<string, string>;
 }): number {
-  fillColor(doc, BRAND.navy);
-  doc.roundedRect(x, y, width, 24, 7, 7, "F");
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(8.8);
-  textColor(doc, [255, 252, 245]);
-  doc.text(`WEEK ${weekNumber || "-"}`, x + 10, y + 16);
-
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(7);
-  textColor(doc, [218, 226, 232]);
-  doc.text(getDateSpan(weekGames), x + width - 10, y + 16, { align: "right" });
-
-  let cursorY = y + 29;
   const locationGroups = new Map<string, Game[]>();
+  const timeSlots = [
+    ...new Set(weekGames.map((game) => format(new Date(game.scheduled_at), "h:mm a"))),
+  ].sort(
+    (a, b) =>
+      new Date(`2000-01-01 ${a}`).getTime() - new Date(`2000-01-01 ${b}`).getTime()
+  );
 
   for (const game of weekGames) {
     const location = getLocationLabel(game);
     locationGroups.set(location, [...(locationGroups.get(location) || []), game]);
   }
 
+  const tableRows: string[][] = [];
+  const locationRowIndexes = new Set<number>();
+
   for (const [location, locationGames] of locationGroups) {
-    fillColor(doc, BRAND.panel);
-    doc.roundedRect(x, cursorY, width, 15, 4, 4, "F");
-    doc.setDrawColor(BRAND.line[0], BRAND.line[1], BRAND.line[2]);
-    doc.roundedRect(x, cursorY, width, 15, 4, 4, "S");
+    locationRowIndexes.add(tableRows.length);
+    tableRows.push([location.toUpperCase(), ...timeSlots.map(() => "")]);
 
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(6.8);
-    textColor(doc, BRAND.blue);
-    doc.text(location.toUpperCase(), x + 7, cursorY + 10);
+    const courts = [...new Set(locationGames.map(getCourtLabel))];
+    for (const court of courts) {
+      const row = [court];
 
-    const tableRows = locationGames.map((game) => {
-      const date = new Date(game.scheduled_at);
-      const status = formatGameStatus(game);
-      return [
-        format(date, "EEE M/d"),
-        format(date, "h:mm a"),
-        getCourtLabel(game),
-        getCompactMatchup(game, teamNumbers),
-        status === "Scheduled" ? "" : status,
-      ];
-    });
+      for (const time of timeSlots) {
+        const game = locationGames.find(
+          (candidate) =>
+            getCourtLabel(candidate) === court &&
+            format(new Date(candidate.scheduled_at), "h:mm a") === time
+        );
+        const status = game ? formatGameStatus(game) : "";
+        const note = game && status !== "Scheduled" ? ` ${status}` : "";
+        row.push(game ? `${getCompactMatchup(game, teamNumbers)}${note}` : "");
+      }
 
-    autoTable(doc, {
-      startY: cursorY + 17,
-      head: [["Date", "Time", "Court", "Game", "Note"]],
-      body: tableRows,
-      theme: "grid",
-      headStyles: {
-        fillColor: BRAND.gold,
-        textColor: BRAND.ink,
-        fontStyle: "bold",
-        fontSize: 6.4,
-        cellPadding: { top: 2.5, right: 3, bottom: 2.5, left: 3 },
-        lineColor: BRAND.gold,
-      },
-      bodyStyles: {
-        fontSize: 6.6,
-        textColor: BRAND.ink,
-        cellPadding: { top: 2.5, right: 3, bottom: 2.5, left: 3 },
-        lineColor: BRAND.line,
-        lineWidth: 0.3,
-      },
-      alternateRowStyles: {
-        fillColor: [252, 249, 242],
-      },
-      columnStyles: {
-        0: { cellWidth: 48 },
-        1: { cellWidth: 48 },
-        2: { cellWidth: 58 },
-        3: { cellWidth: 54, halign: "center", fontStyle: "bold" },
-        4: { cellWidth: width - 208 },
-      },
-      margin: { left: x, right: doc.internal.pageSize.getWidth() - x - width },
-      tableWidth: width,
-      pageBreak: "avoid",
-      rowPageBreak: "avoid",
-    });
-
-    cursorY = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 7;
+      tableRows.push(row);
+    }
   }
 
-  return cursorY - y;
+  const firstDate = weekGames[0] ? format(new Date(weekGames[0].scheduled_at), "MMM d") : "";
+
+  autoTable(doc, {
+    startY: y,
+    head: [[`Wk. ${weekNumber || "-"} ${firstDate}`, ...timeSlots]],
+    body: tableRows,
+    theme: "grid",
+    headStyles: {
+      fillColor: [255, 255, 255],
+      textColor: BRAND.ink,
+      fontStyle: "bold",
+      fontSize: 7,
+      cellPadding: { top: 2, right: 2.5, bottom: 2, left: 2.5 },
+      lineColor: BRAND.ink,
+      lineWidth: 0.5,
+    },
+    bodyStyles: {
+      fillColor: [255, 255, 255],
+      fontSize: 6.4,
+      textColor: BRAND.ink,
+      cellPadding: { top: 1.6, right: 2.5, bottom: 1.6, left: 2.5 },
+      lineColor: [84, 84, 84],
+      lineWidth: 0.35,
+      minCellHeight: 9,
+    },
+    alternateRowStyles: {
+      fillColor: [255, 255, 255],
+    },
+    columnStyles: {
+      0: { cellWidth: 62, fontStyle: "bold" },
+    },
+    didParseCell: (data) => {
+      if (data.section !== "body") return;
+      if (locationRowIndexes.has(data.row.index)) {
+        data.cell.styles.fillColor = [239, 239, 239];
+        data.cell.styles.fontStyle = "bold";
+        data.cell.styles.textColor = BRAND.slate;
+        data.cell.styles.fontSize = 5.8;
+      }
+    },
+    margin: { left: x, right: doc.internal.pageSize.getWidth() - x - width },
+    tableWidth: width,
+    pageBreak: "avoid",
+    rowPageBreak: "avoid",
+  });
+
+  return (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY - y;
 }
 
 export function generateSchedulePdf({
@@ -457,14 +460,14 @@ export function generateSchedulePdf({
     const weeksPerRow = 2;
     const gapX = 16;
     const blockWidth = (pageWidth - MARGIN_X * 2 - gapX) / weeksPerRow;
-    let currentY = 88;
+    let currentY = 60;
 
     for (let weekIndex = 0; weekIndex < sortedWeeks.length; weekIndex += weeksPerRow) {
-      if (currentY > pageHeight - FOOTER_HEIGHT - 92) {
+      if (currentY > pageHeight - FOOTER_HEIGHT - 72) {
         doc.addPage();
         drawPageBackground(doc);
         drawCompactScheduleHeader(doc, league, activeGames);
-        currentY = 88;
+        currentY = 60;
       }
 
       let rowHeight = 0;
@@ -490,7 +493,7 @@ export function generateSchedulePdf({
         rowHeight = Math.max(rowHeight, height);
       }
 
-      currentY += rowHeight + 16;
+      currentY += rowHeight + 10;
     }
   }
 
