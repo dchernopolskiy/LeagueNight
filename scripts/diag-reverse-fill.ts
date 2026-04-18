@@ -45,6 +45,7 @@ async function main() {
   const preflight = schedulePreflight(weekFillTeams, patternObj, {
     matchupFrequency: p.matchup_frequency,
     gamesPerSession: p.games_per_session,
+    gamesPerTeam: p.games_per_team,
   }, divs || []);
   console.log("preflight:", preflight);
 
@@ -57,6 +58,7 @@ async function main() {
       allowCrossPlay: p.mix_divisions,
       crossPlayRules: crossPlay || [],
       acceptTruncation: true,
+      gamesPerTeam: p.games_per_team,
     },
     teamsMap: teamsMap as any,
   });
@@ -135,15 +137,21 @@ async function main() {
       perWeek.set(tid, m);
     }
   }
+  const weeks12 = [1,2,3,4,5,6,7,8,9,10,11,12];
   console.log("\nA teams per-week games:");
   for (const t of teams!.filter((t: any) => divName.get(t.division_id) === 'REVERSE A MONDAYS')) {
     const m = perWeek.get(t.id) || new Map();
-    console.log(`  ${t.name}: ${[1,2,3,4,5,6,7].map(w => m.get(w) || 0).join(' ')}`);
+    console.log(`  ${t.name.padEnd(28)} ${weeks12.map(w => m.get(w) || 0).join(' ')}`);
   }
   console.log("\nB teams per-week games:");
   for (const t of teams!.filter((t: any) => divName.get(t.division_id) === 'REVERSE B MONDAYS')) {
     const m = perWeek.get(t.id) || new Map();
-    console.log(`  ${t.name}: ${[1,2,3,4,5,6,7].map(w => m.get(w) || 0).join(' ')}`);
+    console.log(`  ${t.name.padEnd(28)} ${weeks12.map(w => m.get(w) || 0).join(' ')}`);
+  }
+  console.log("\nB+ teams per-week games:");
+  for (const t of teams!.filter((t: any) => divName.get(t.division_id) === 'REVERSE B+ MONDAYS')) {
+    const m = perWeek.get(t.id) || new Map();
+    console.log(`  ${t.name.padEnd(28)} ${weeks12.map(w => m.get(w) || 0).join(' ')}`);
   }
 }
 main().catch((e) => {

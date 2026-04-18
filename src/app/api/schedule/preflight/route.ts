@@ -16,6 +16,7 @@ export async function POST(request: NextRequest) {
     patternId,
     gamesPerSession = 1,
     matchupFrequency = 1,
+    gamesPerTeam,
     skipDates = [],
     locationIds = [],
   } = body;
@@ -120,7 +121,7 @@ export async function POST(request: NextRequest) {
       durationMinutes: pattern.duration_minutes || 60,
       skipDates: Array.from(mergedSkipDates),
     },
-    { matchupFrequency, gamesPerSession },
+    { matchupFrequency, gamesPerSession, gamesPerTeam },
     divisions || []
   );
 

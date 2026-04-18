@@ -242,7 +242,7 @@ export async function POST(request: NextRequest) {
   const preflight = schedulePreflight(
     weekFillTeams,
     patternObj,
-    { matchupFrequency, gamesPerSession },
+    { matchupFrequency, gamesPerSession, gamesPerTeam },
     divisions || []
   );
 
@@ -267,6 +267,7 @@ export async function POST(request: NextRequest) {
       allowCrossPlay: effectiveMixDivisions,
       crossPlayRules: effectiveCrossPlayRules,
       acceptTruncation,
+      gamesPerTeam,
     },
     teamsMap,
     regenerateFromDate,

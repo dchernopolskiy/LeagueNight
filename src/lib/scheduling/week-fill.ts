@@ -29,6 +29,10 @@ export interface WeekFillOptions {
   // When true, scheduler truncates biggest-division round-robin to fit available weeks.
   // When false, scheduler errors if endsOn forces too few weeks.
   acceptTruncation?: boolean;
+  // Organizer's desired games-per-team. If larger than the biggest-division
+  // round-robin requires, season length extends and the extra weeks are
+  // filled with crossplay (when allowed) or repeat matchups.
+  gamesPerTeam?: number;
 }
 
 export interface WeekFillScheduledGame {
@@ -63,6 +67,7 @@ export interface PreflightResult {
   droppedPairCount: number; // only meaningful when !fits
   targetWeeks: number;
   matchupFrequency: number;
+  gamesPerTeamTarget: number; // desired games-per-team after sizing
 }
 
 function buildGameDays(pattern: WeekFillPattern): Date[] {
@@ -125,7 +130,7 @@ function teamsByDivision(teams: WeekFillTeam[]): Map<string, WeekFillTeam[]> {
 export function schedulePreflight(
   teams: WeekFillTeam[],
   pattern: WeekFillPattern,
-  opts: Pick<WeekFillOptions, "matchupFrequency" | "gamesPerSession">,
+  opts: Pick<WeekFillOptions, "matchupFrequency" | "gamesPerSession"> & { gamesPerTeam?: number },
   divisionsMeta?: Array<{ id: string; name: string }>
 ): PreflightResult {
   const divMap = teamsByDivision(teams);
@@ -141,7 +146,15 @@ export function schedulePreflight(
   // Rounds needed = (n-1) * freq for even n; n * freq for odd n (includes BYE round).
   const baseRounds = biggestSize % 2 === 0 ? biggestSize - 1 : biggestSize;
   const fullRounds = baseRounds * opts.matchupFrequency;
-  const minWeeks = Math.max(0, Math.ceil(fullRounds / Math.max(1, opts.gamesPerSession)));
+  const roundRobinWeeks = Math.max(0, Math.ceil(fullRounds / Math.max(1, opts.gamesPerSession)));
+
+  // Target weeks honors both (a) biggest-division round-robin and (b) the
+  // organizer's games_per_team goal. Whichever needs more weeks wins.
+  const gamesPerTeamGoal = opts.gamesPerTeam ?? 0;
+  const weeksForGoal = gamesPerTeamGoal > 0
+    ? Math.ceil(gamesPerTeamGoal / Math.max(1, opts.gamesPerSession))
+    : 0;
+  const minWeeks = Math.max(roundRobinWeeks, weeksForGoal);
 
   const gameDays = buildGameDays(pattern);
   const available = pattern.endsOn ? gameDays.length : Number.POSITIVE_INFINITY;
@@ -151,7 +164,7 @@ export function schedulePreflight(
 
   // Dropped-pair estimate: rounds we can't fit × pairs-per-round (n/2 for even, (n-1)/2 for odd).
   const pairsPerRound = Math.floor(biggestSize / 2);
-  const missingRounds = Math.max(0, minWeeks * opts.gamesPerSession - available * opts.gamesPerSession);
+  const missingRounds = Math.max(0, roundRobinWeeks * opts.gamesPerSession - (available === Number.POSITIVE_INFINITY ? roundRobinWeeks * opts.gamesPerSession : available * opts.gamesPerSession));
   const droppedPairs = fits ? 0 : missingRounds * pairsPerRound;
 
   const biggestName = biggestId && biggestId !== "__none__"
@@ -170,6 +183,7 @@ export function schedulePreflight(
     droppedPairCount: droppedPairs,
     targetWeeks,
     matchupFrequency: opts.matchupFrequency,
+    gamesPerTeamTarget: targetWeeks * opts.gamesPerSession,
   };
 }
 
@@ -224,6 +238,7 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
   const preflight = schedulePreflight(teams, pattern, {
     matchupFrequency: opts.matchupFrequency,
     gamesPerSession: opts.gamesPerSession,
+    gamesPerTeam: opts.gamesPerTeam,
   });
 
   const allGameDays = buildGameDays(pattern);
@@ -448,43 +463,68 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
     return { score, applied, notes };
   }
 
-  // ── Seed: biggest division's round-robin is fixed upfront ────────────────
+  // ── Seed: every division's round-robin is fixed upfront ──────────────────
   //
   // Greedy per-slot scoring can't guarantee a perfect within-division round
-  // robin when slots are tight. The circle method does. So for the biggest
-  // division we pre-assign every pair to a specific week. The greedy loop
-  // then fills remaining slots around these seeds.
+  // robin when slots are tight. The circle method does. So for *each* division
+  // we pre-assign every pair to a specific week, spread evenly across the
+  // season. The greedy loop then fills remaining slots around these seeds
+  // (crossplay, repeats, or leftover partial sessions).
+  //
+  // When a division is smaller than the biggest, its round-robin has fewer
+  // rounds than `targetWeeks`. Spreading those rounds across the full window
+  // (instead of packing them into early weeks) is what prevents the A/B-div
+  // "empty middle/late season" bug where small divisions exhaust within-div
+  // pairs by week 3 and have nothing to play in weeks 4-7.
   //
   // We skip seeding when existingMatchupCounts already has prior plays, to
   // avoid double-counting; in that case fall back to pure greedy.
 
-  let biggestDivId: string | null = null;
-  let biggestSize = 0;
-  for (const [divId, divTeams] of divMap) {
-    if (divTeams.length > biggestSize) {
-      biggestSize = divTeams.length;
-      biggestDivId = divId;
-    }
-  }
-
   // weekNumber -> list of seeded matchups [teamA, teamB]
   const seededByWeek = new Map<number, Array<{ a: string; b: string }>>();
   const shouldSeed =
-    biggestDivId !== null &&
-    biggestSize >= 4 &&
-    (existingMatchupCounts === undefined || existingMatchupCounts.size === 0);
+    existingMatchupCounts === undefined || existingMatchupCounts.size === 0;
 
-  if (shouldSeed && biggestDivId) {
-    const biggestTeams = (divMap.get(biggestDivId) || []).map((t) => t.id);
-    const matchups = generateRoundRobin(biggestTeams, opts.matchupFrequency);
-    // Pack `gamesPerSession` rounds into each week (matches round-robin.assignDates).
-    for (const m of matchups) {
-      const week = Math.ceil(m.round / Math.max(1, opts.gamesPerSession));
-      const arr = seededByWeek.get(week) || [];
-      arr.push({ a: m.home, b: m.away });
-      seededByWeek.set(week, arr);
+  if (shouldSeed && targetWeeks > 0) {
+    for (const [divId, divTeams] of divMap) {
+      // Skip the "no division" bucket only when other divisions exist —
+      // otherwise divisionless teams have no round-robin at all. When every
+      // team is divisionless, treat them as one pooled division.
+      if (divId === "__none__" && divMap.size > 1) continue;
+      if (divTeams.length < 2) continue;
+
+      const teamIds = divTeams.map((t) => t.id);
+      const matchups = generateRoundRobin(teamIds, opts.matchupFrequency);
+      // Pack `gamesPerSession` rounds into one "week-bundle" (each bundle is
+      // what a single game day covers). Bundles then spread across the season.
+      const bundles = new Map<number, Array<{ a: string; b: string }>>();
+      for (const m of matchups) {
+        const bundle = Math.ceil(m.round / Math.max(1, opts.gamesPerSession));
+        const arr = bundles.get(bundle) || [];
+        arr.push({ a: m.home, b: m.away });
+        bundles.set(bundle, arr);
+      }
+
+      const bundleList = [...bundles.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v);
+      const bundleCount = bundleList.length;
+      if (bundleCount === 0) continue;
+
+      // Spread bundles across targetWeeks. Even distribution: bundle i → week
+      // round((i + 0.5) * targetWeeks / bundleCount). Two divisions with
+      // different sizes get their within-div games spread across the same
+      // window instead of all clustering at the start.
+      for (let i = 0; i < bundleCount; i++) {
+        const week = Math.min(
+          targetWeeks,
+          Math.max(1, Math.round(((i + 0.5) * targetWeeks) / bundleCount))
+        );
+        const arr = seededByWeek.get(week) || [];
+        arr.push(...bundleList[i]);
+        seededByWeek.set(week, arr);
+      }
     }
   }
+
 
   // ── Week-by-week fill ─────────────────────────────────────────────────────
 
@@ -515,7 +555,7 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
       return true;
     }
 
-    // Seed phase: place biggest-division round-robin matchups for this week
+    // Seed phase: place pre-assigned within-division matchups for this week
     // into the earliest available slots (respecting bucket constraints).
     const seededPairs = seededByWeek.get(weekNumber) || [];
     for (const seed of seededPairs) {
@@ -576,17 +616,12 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
         if (!isTeamEligible(pair.teamA) || !isTeamEligible(pair.teamB)) continue;
         if (teamsInBucket.has(pair.teamA) || teamsInBucket.has(pair.teamB)) continue;
 
-        // Within-division pairs: never play beyond the requested matchup frequency.
-        // Without this, the greedy scorer picks repeat pairs when every fresh pair
-        // is blocked in that slot (leading to pairs that never meet each other).
-        if (!pair.crossDiv && pair.playedCount >= pair.targetCount) continue;
-
-        // Skip crossplay when both teams still have within-div work available.
-        if (pair.crossDiv) {
-          const aHasWithinDivWork = hasUnfinishedWithinDiv(pair.teamA);
-          const bHasWithinDivWork = hasUnfinishedWithinDiv(pair.teamB);
-          if (aHasWithinDivWork && bHasWithinDivWork) continue;
-        }
+        // Within-division pairs are seeded in advance (circle method). Greedy
+        // only picks a within-div pair as a *repeat* (playedCount > 0), and
+        // only when the team needs more games than its division's round-robin
+        // provides (gamesPerTeam > round-robin total). Even then, repeats are
+        // heavily penalized in scorePair so crossplay wins when available.
+        if (!pair.crossDiv && pair.playedCount === 0) continue;
 
         const scored = scorePair(pair, weekNumber, slotDate, isEarly, isLate);
         if (!scored) continue;
@@ -647,14 +682,6 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
     }
   }
 
-  function hasUnfinishedWithinDiv(teamId: string): boolean {
-    for (const p of pairs.values()) {
-      if (p.crossDiv) continue;
-      if (p.exhausted) continue;
-      if (p.teamA === teamId || p.teamB === teamId) return true;
-    }
-    return false;
-  }
 
   // Dropped pairs report
   const droppedPairs: WeekFillResult["droppedPairs"] = [];
