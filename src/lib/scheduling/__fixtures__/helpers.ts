@@ -21,7 +21,7 @@ export function buildTeams(teams: ScenarioTeam[]): {
     division_id: t.division,
   }));
   const teamsMap = new Map(
-    teams.map((t) => [t.id, { id: t.id, name: t.name, preferences: null }])
+    teams.map((t) => [t.id, { id: t.id, name: t.name, preferences: undefined }])
   );
   return { weekFillTeams, teamsMap };
 }
