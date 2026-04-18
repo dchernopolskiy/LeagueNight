@@ -1,5 +1,6 @@
 import type { PreferenceApplied, Team } from "@/lib/types";
 import { formatYMD } from "./date-utils";
+import { generateRoundRobin } from "./round-robin";
 
 export interface WeekFillTeam {
   id: string;
@@ -449,6 +450,44 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
     return { score, applied, notes };
   }
 
+  // ── Seed: biggest division's round-robin is fixed upfront ────────────────
+  //
+  // Greedy per-slot scoring can't guarantee a perfect within-division round
+  // robin when slots are tight. The circle method does. So for the biggest
+  // division we pre-assign every pair to a specific week. The greedy loop
+  // then fills remaining slots around these seeds.
+  //
+  // We skip seeding when existingMatchupCounts already has prior plays, to
+  // avoid double-counting; in that case fall back to pure greedy.
+
+  let biggestDivId: string | null = null;
+  let biggestSize = 0;
+  for (const [divId, divTeams] of divMap) {
+    if (divTeams.length > biggestSize) {
+      biggestSize = divTeams.length;
+      biggestDivId = divId;
+    }
+  }
+
+  // weekNumber -> list of seeded matchups [teamA, teamB]
+  const seededByWeek = new Map<number, Array<{ a: string; b: string }>>();
+  const shouldSeed =
+    biggestDivId !== null &&
+    biggestSize >= 4 &&
+    (existingMatchupCounts === undefined || existingMatchupCounts.size === 0);
+
+  if (shouldSeed && biggestDivId) {
+    const biggestTeams = (divMap.get(biggestDivId) || []).map((t) => t.id);
+    const matchups = generateRoundRobin(biggestTeams, opts.matchupFrequency);
+    // Pack `gamesPerSession` rounds into each week (matches round-robin.assignDates).
+    for (const m of matchups) {
+      const week = Math.ceil(m.round / Math.max(1, opts.gamesPerSession));
+      const arr = seededByWeek.get(week) || [];
+      arr.push({ a: m.home, b: m.away });
+      seededByWeek.set(week, arr);
+    }
+  }
+
   // ── Week-by-week fill ─────────────────────────────────────────────────────
 
   const resultGames: WeekFillScheduledGame[] = [];
@@ -478,6 +517,50 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
       return true;
     }
 
+    // Seed phase: place biggest-division round-robin matchups for this week
+    // into the earliest available slots (respecting bucket constraints).
+    const seededPairs = seededByWeek.get(weekNumber) || [];
+    for (const seed of seededPairs) {
+      for (let slotIdx = 0; slotIdx < totalSlots; slotIdx++) {
+        if (usedSlots.has(slotIdx)) continue;
+        const bucket = slotBucket(slotIdx);
+        const teamsInBucket = slotTeams.get(bucket) || new Set<string>();
+        if (teamsInBucket.has(seed.a) || teamsInBucket.has(seed.b)) continue;
+        if ((gamesThisWeek.get(seed.a) || 0) >= opts.gamesPerSession) break;
+        if ((gamesThisWeek.get(seed.b) || 0) >= opts.gamesPerSession) break;
+        const slotDate = slotTime(dayDate, slotIdx);
+        const courtNum = (slotIdx % courtCount) + 1;
+        const key = pairKey(seed.a, seed.b);
+        const pair = pairs.get(key);
+        if (!pair) break;
+
+        resultGames.push({
+          home: seed.a,
+          away: seed.b,
+          scheduledAt: slotDate,
+          venue: pattern.venue,
+          court: courtCount > 1 ? `Court ${courtNum}` : null,
+          weekNumber,
+          preferenceApplied: null,
+          schedulingNotes: null,
+        });
+
+        pair.playedCount += 1;
+        pair.exhausted = pair.playedCount >= pair.targetCount;
+        teamState.get(seed.a)!.gamesPlayed += 1;
+        teamState.get(seed.b)!.gamesPlayed += 1;
+        teamState.get(seed.a)!.lastPlayedWeek = weekNumber;
+        teamState.get(seed.b)!.lastPlayedWeek = weekNumber;
+        gamesThisWeek.set(seed.a, (gamesThisWeek.get(seed.a) || 0) + 1);
+        gamesThisWeek.set(seed.b, (gamesThisWeek.get(seed.b) || 0) + 1);
+        teamsInBucket.add(seed.a);
+        teamsInBucket.add(seed.b);
+        slotTeams.set(bucket, teamsInBucket);
+        usedSlots.add(slotIdx);
+        break;
+      }
+    }
+
     // Iterate slots in time order (bucket by bucket, court by court within bucket).
     for (let slotIdx = 0; slotIdx < totalSlots; slotIdx++) {
       if (usedSlots.has(slotIdx)) continue;
@@ -491,10 +574,14 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
       let bestKey: string | null = null;
       let bestScore = Number.NEGATIVE_INFINITY;
       let bestMeta: { applied: PreferenceApplied; notes: string[] } | null = null;
-
       for (const [key, pair] of pairs) {
         if (!isTeamEligible(pair.teamA) || !isTeamEligible(pair.teamB)) continue;
         if (teamsInBucket.has(pair.teamA) || teamsInBucket.has(pair.teamB)) continue;
+
+        // Within-division pairs: never play beyond the requested matchup frequency.
+        // Without this, the greedy scorer picks repeat pairs when every fresh pair
+        // is blocked in that slot (leading to pairs that never meet each other).
+        if (!pair.crossDiv && pair.playedCount >= pair.targetCount) continue;
 
         // Skip crossplay when both teams still have within-div work available.
         if (pair.crossDiv) {
