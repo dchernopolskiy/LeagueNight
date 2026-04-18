@@ -232,9 +232,7 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
     ? allGameDays.filter((d) => d >= regenerateFromDate)
     : allGameDays;
 
-  const targetWeeks = pattern.endsOn
-    ? gameDays.length
-    : preflight.minWeeksNeeded;
+  const targetWeeks = preflight.targetWeeks;
 
   // ── Build the pairing pool ────────────────────────────────────────────────
 
