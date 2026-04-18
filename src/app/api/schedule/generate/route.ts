@@ -2,6 +2,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getProfile } from "@/lib/supabase/helpers";
 import { generateRoundRobin, assignDatesWithPreferences } from "@/lib/scheduling/round-robin";
 import { localToUTCISO } from "@/lib/scheduling/date-utils";
+import { assignGamesToLocationCourtSlots } from "@/lib/scheduling/location-assignment";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
@@ -384,15 +385,8 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Helper to format date as YYYY-MM-DD
-  function formatYMD(d: Date): string {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  }
-
-  // Insert new games, distributing across available location court slots per date
+  // Insert new games, assigning physical courts per date so teams stay at one
+  // location for the night whenever venue capacity makes that possible.
   const gamesToInsert: Array<{
     league_id: string;
     home_team_id: string;
@@ -408,51 +402,34 @@ export async function POST(request: NextRequest) {
   }> = [];
 
   if (courtSlots.length > 0) {
-    // Group scheduled games by date for per-date court distribution
-    const gamesByDate = new Map<string, typeof scheduled>();
-    for (const g of scheduled) {
-      const key = formatYMD(g.scheduledAt);
-      const arr = gamesByDate.get(key) || [];
-      arr.push(g);
-      gamesByDate.set(key, arr);
+    const teamDivisionIds = new Map(teams.map((team) => [team.id, team.division_id]));
+    const assignedGames = assignGamesToLocationCourtSlots(
+      scheduled,
+      courtSlots,
+      unavailByDate,
+      teamDivisionIds
+    );
+    const droppedByLocationAssignment = scheduled.length - assignedGames.length;
+    if (droppedByLocationAssignment > 0) {
+      schedulingWarnings.push(
+        `${droppedByLocationAssignment} game${droppedByLocationAssignment === 1 ? "" : "s"} could not be assigned to an available court without overbooking.`
+      );
     }
 
-    for (const [dateStr, dateGames] of gamesByDate) {
-      const unavailOnDate = unavailByDate.get(dateStr) || new Set<string>();
-      const availableSlots = courtSlots.filter(s => !unavailOnDate.has(s.locationId));
-      const slotsToUse = availableSlots.length > 0 ? availableSlots : courtSlots;
-
-      // Group games by timestamp so each time-slot distributes evenly across
-      // all locations' courts, instead of relying on arrival order.
-      const gamesByTime = new Map<number, typeof dateGames>();
-      for (const g of dateGames) {
-        const key = g.scheduledAt.getTime();
-        const arr = gamesByTime.get(key) || [];
-        arr.push(g);
-        gamesByTime.set(key, arr);
-      }
-      const sortedTimes = Array.from(gamesByTime.keys()).sort((a, b) => a - b);
-
-      for (const t of sortedTimes) {
-        const group = gamesByTime.get(t)!;
-        for (let i = 0; i < group.length; i++) {
-          const g = group[i];
-          const slot = slotsToUse[i % slotsToUse.length];
-          gamesToInsert.push({
-            league_id: leagueId,
-            home_team_id: g.home,
-            away_team_id: g.away,
-            scheduled_at: localToUTCISO(g.scheduledAt, timezone),
-            venue: slot.locationName,
-            court: slot.totalCourts > 1 ? `Court ${slot.courtNum}` : null,
-            week_number: g.weekNumber,
-            status: "scheduled",
-            location_id: slot.locationId,
-            preference_applied: g.preferenceApplied || null,
-            scheduling_notes: g.schedulingNotes || null,
-          });
-        }
-      }
+    for (const g of assignedGames) {
+      gamesToInsert.push({
+        league_id: leagueId,
+        home_team_id: g.home,
+        away_team_id: g.away,
+        scheduled_at: localToUTCISO(g.scheduledAt, timezone),
+        venue: g.locationName,
+        court: g.totalCourts > 1 ? `Court ${g.courtNum}` : null,
+        week_number: g.weekNumber,
+        status: "scheduled",
+        location_id: g.locationId,
+        preference_applied: g.preferenceApplied || null,
+        scheduling_notes: g.schedulingNotes || null,
+      });
     }
   } else {
     // No locations selected — use pattern defaults
@@ -487,6 +464,6 @@ export async function POST(request: NextRequest) {
     count: insertedGames?.length || 0,
     warnings: schedulingWarnings.length > 0 ? schedulingWarnings : undefined,
     totalMatchups: allMatchups.length,
-    scheduledGames: scheduled.length,
+    scheduledGames: gamesToInsert.length,
   });
 }

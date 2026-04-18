@@ -1,8 +1,9 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getProfile } from "@/lib/supabase/helpers";
 import { fillScheduleByWeek, schedulePreflight } from "@/lib/scheduling/week-fill";
-import { localToUTCISO, parseLocalDate, formatYMD } from "@/lib/scheduling/date-utils";
+import { localToUTCISO, parseLocalDate } from "@/lib/scheduling/date-utils";
 import { computeReseedPools, type ReseedMode } from "@/lib/scheduling/reseed";
+import { assignGamesToLocationCourtSlots } from "@/lib/scheduling/location-assignment";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
@@ -305,8 +306,8 @@ export async function POST(request: NextRequest) {
       .eq("is_playoff", false);
   }
 
-  // Build court slots (locationId + courtNum) and distribute games across them per-date,
-  // grouped by time so every slot uses all available locations evenly.
+  // Build court slots (locationId + courtNum). Physical court assignment is
+  // handled as a per-date pass so teams do not bounce between locations.
   const courtSlots: { locationId: string; courtNum: number; locationName: string; totalCourts: number }[] = [];
   for (const locId of effectiveLocationIds) {
     const loc = locationsMap.get(locId);
@@ -334,50 +335,32 @@ export async function POST(request: NextRequest) {
     preference_applied: unknown;
     scheduling_notes: string | null;
   }> = [];
+  let locationAssignmentDroppedCount = 0;
 
   if (courtSlots.length > 0) {
-    const gamesByDate = new Map<string, typeof result.games>();
-    for (const g of result.games) {
-      const key = formatYMD(g.scheduledAt);
-      const arr = gamesByDate.get(key) || [];
-      arr.push(g);
-      gamesByDate.set(key, arr);
-    }
+    const teamDivisionIds = new Map(weekFillTeams.map((team) => [team.id, team.division_id]));
+    const assignedGames = assignGamesToLocationCourtSlots(
+      result.games,
+      courtSlots,
+      unavailByDate,
+      teamDivisionIds
+    );
+    locationAssignmentDroppedCount = result.games.length - assignedGames.length;
 
-    for (const [dateStr, dateGames] of gamesByDate) {
-      const unavailOnDate = unavailByDate.get(dateStr) || new Set<string>();
-      const availSlots = courtSlots.filter((s) => !unavailOnDate.has(s.locationId));
-      const slotsToUse = availSlots.length > 0 ? availSlots : courtSlots;
-
-      const gamesByTime = new Map<number, typeof dateGames>();
-      for (const g of dateGames) {
-        const k = g.scheduledAt.getTime();
-        const arr = gamesByTime.get(k) || [];
-        arr.push(g);
-        gamesByTime.set(k, arr);
-      }
-      const sortedTimes = Array.from(gamesByTime.keys()).sort((a, b) => a - b);
-
-      for (const t of sortedTimes) {
-        const group = gamesByTime.get(t)!;
-        for (let i = 0; i < group.length; i++) {
-          const g = group[i];
-          const slot = slotsToUse[i % slotsToUse.length];
-          gamesToInsert.push({
-            league_id: leagueId,
-            home_team_id: g.home,
-            away_team_id: g.away,
-            scheduled_at: localToUTCISO(g.scheduledAt, timezone),
-            venue: slot.locationName,
-            court: slot.totalCourts > 1 ? `Court ${slot.courtNum}` : null,
-            week_number: g.weekNumber,
-            status: "scheduled",
-            location_id: slot.locationId,
-            preference_applied: g.preferenceApplied || null,
-            scheduling_notes: g.schedulingNotes || null,
-          });
-        }
-      }
+    for (const g of assignedGames) {
+      gamesToInsert.push({
+        league_id: leagueId,
+        home_team_id: g.home,
+        away_team_id: g.away,
+        scheduled_at: localToUTCISO(g.scheduledAt, timezone),
+        venue: g.locationName,
+        court: g.totalCourts > 1 ? `Court ${g.courtNum}` : null,
+        week_number: g.weekNumber,
+        status: "scheduled",
+        location_id: g.locationId,
+        preference_applied: g.preferenceApplied || null,
+        scheduling_notes: g.schedulingNotes || null,
+      });
     }
   } else {
     for (const g of result.games) {
@@ -410,6 +393,11 @@ export async function POST(request: NextRequest) {
   if (result.droppedPairs.length > 0) {
     warnings.push(
       `${result.droppedPairs.length} pairing${result.droppedPairs.length > 1 ? "s" : ""} could not be scheduled within the available weeks.`
+    );
+  }
+  if (locationAssignmentDroppedCount > 0) {
+    warnings.push(
+      `${locationAssignmentDroppedCount} game${locationAssignmentDroppedCount === 1 ? "" : "s"} could not be assigned to an available court without overbooking.`
     );
   }
   const backToBackByes = result.byes.filter((b) => b.backToBack);
