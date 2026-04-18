@@ -65,6 +65,9 @@ export interface PreflightResult {
   availableWeeks: number; // Infinity if no endsOn
   fits: boolean;
   droppedPairCount: number; // only meaningful when !fits
+  // Shortfall per team vs. the organizer's gamesPerTeam goal. Non-zero when
+  // the calendar can't accommodate the goal even if the round-robin fits.
+  gamesPerTeamShortfall: number;
   targetWeeks: number;
   matchupFrequency: number;
   gamesPerTeamTarget: number; // desired games-per-team after sizing
@@ -162,10 +165,18 @@ export function schedulePreflight(
   const fits = available >= minWeeks;
   const targetWeeks = Math.min(minWeeks, available === Number.POSITIVE_INFINITY ? minWeeks : available);
 
-  // Dropped-pair estimate: rounds we can't fit × pairs-per-round (n/2 for even, (n-1)/2 for odd).
+  // Shortfall breakdown:
+  //  - pairings dropped when the biggest-division round-robin doesn't fit
+  //  - games-per-team shortfall when the calendar is shorter than the
+  //    games_per_team goal (even if the round-robin would fit)
   const pairsPerRound = Math.floor(biggestSize / 2);
-  const missingRounds = Math.max(0, roundRobinWeeks * opts.gamesPerSession - (available === Number.POSITIVE_INFINITY ? roundRobinWeeks * opts.gamesPerSession : available * opts.gamesPerSession));
-  const droppedPairs = fits ? 0 : missingRounds * pairsPerRound;
+  const availableWeeksFinite = available === Number.POSITIVE_INFINITY ? minWeeks : available;
+  const missingRoundRobinRounds = Math.max(
+    0,
+    roundRobinWeeks * opts.gamesPerSession - availableWeeksFinite * opts.gamesPerSession
+  );
+  const droppedPairs = missingRoundRobinRounds * pairsPerRound;
+  const gamesPerTeamShortfall = Math.max(0, gamesPerTeamGoal - availableWeeksFinite * opts.gamesPerSession);
 
   const biggestName = biggestId && biggestId !== "__none__"
     ? divisionsMeta?.find((d) => d.id === biggestId)?.name ?? null
@@ -181,6 +192,7 @@ export function schedulePreflight(
     availableWeeks: available,
     fits,
     droppedPairCount: droppedPairs,
+    gamesPerTeamShortfall,
     targetWeeks,
     matchupFrequency: opts.matchupFrequency,
     gamesPerTeamTarget: targetWeeks * opts.gamesPerSession,

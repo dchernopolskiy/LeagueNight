@@ -103,6 +103,7 @@ export default function SchedulePage() {
       minWeeksNeeded: number;
       availableWeeks: number;
       droppedPairCount: number;
+      gamesPerTeamShortfall?: number;
     };
     retry: () => Promise<void>;
   } | null>(null);
@@ -658,10 +659,19 @@ export default function SchedulePage() {
                 Needs <strong>{preflightPrompt.preflight.minWeeksNeeded}</strong> weeks; only{" "}
                 <strong>{preflightPrompt.preflight.availableWeeks}</strong> available
               </div>
-              <div>
-                <strong>{preflightPrompt.preflight.droppedPairCount}</strong> pairing
-                {preflightPrompt.preflight.droppedPairCount === 1 ? "" : "s"} will be dropped
-              </div>
+              {preflightPrompt.preflight.droppedPairCount > 0 && (
+                <div>
+                  <strong>{preflightPrompt.preflight.droppedPairCount}</strong> round-robin pairing
+                  {preflightPrompt.preflight.droppedPairCount === 1 ? "" : "s"} will be dropped
+                </div>
+              )}
+              {(preflightPrompt.preflight.gamesPerTeamShortfall ?? 0) > 0 && (
+                <div>
+                  Each team will play up to{" "}
+                  <strong>{preflightPrompt.preflight.gamesPerTeamShortfall}</strong> fewer game
+                  {preflightPrompt.preflight.gamesPerTeamShortfall === 1 ? "" : "s"} than the goal
+                </div>
+              )}
             </div>
             <div className="flex gap-2 pt-1">
               <Button

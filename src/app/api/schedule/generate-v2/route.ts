@@ -247,11 +247,25 @@ export async function POST(request: NextRequest) {
   );
 
   if (!preflight.fits && !acceptTruncation) {
+    const divLabel = preflight.biggestDivisionName ?? "biggest";
+    const parts: string[] = [
+      `Division ${divLabel} needs ${preflight.minWeeksNeeded} weeks but only ${preflight.availableWeeks} weeks are available.`,
+    ];
+    if (preflight.droppedPairCount > 0) {
+      parts.push(
+        `${preflight.droppedPairCount} round-robin pairing${preflight.droppedPairCount === 1 ? "" : "s"} will be dropped.`
+      );
+    }
+    if (preflight.gamesPerTeamShortfall > 0) {
+      parts.push(
+        `Each team will play up to ${preflight.gamesPerTeamShortfall} fewer game${preflight.gamesPerTeamShortfall === 1 ? "" : "s"} than the goal of ${gamesPerTeam}.`
+      );
+    }
     return NextResponse.json(
       {
         error: "truncation_required",
         preflight,
-        message: `Division ${preflight.biggestDivisionName ?? "biggest"} needs ${preflight.minWeeksNeeded} weeks for full round-robin but only ${preflight.availableWeeks} weeks are available. ${preflight.droppedPairCount} pairings will be dropped.`,
+        message: parts.join(" "),
       },
       { status: 409 }
     );
