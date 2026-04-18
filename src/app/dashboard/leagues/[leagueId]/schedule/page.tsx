@@ -34,6 +34,7 @@ import { exportLeagueScheduleXlsx } from "@/lib/export/data-export";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -45,6 +46,17 @@ import { GameDaySetupPanel } from "@/components/dashboard/game-day-setup";
 import { useLeagueData } from "@/lib/hooks";
 import { PreferenceIndicator } from "@/components/dashboard/preference-indicator";
 
+
+function safeFormat(value: Date | string | null | undefined, pattern: string, fallback = "—"): string {
+  if (value == null) return fallback;
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return fallback;
+  try {
+    return format(d, pattern);
+  } catch {
+    return fallback;
+  }
+}
 
 function Stat({ label, value, warn }: { label: string; value: string | number; warn?: boolean }) {
   return (
@@ -297,7 +309,10 @@ export default function SchedulePage() {
       .map((p) => p.last_regenerated_at)
       .filter((s): s is string => !!s)
       .sort();
-    if (stamps.length > 0) return new Date(stamps[stamps.length - 1]);
+    if (stamps.length > 0) {
+      const d = new Date(stamps[stamps.length - 1]);
+      if (!Number.isNaN(d.getTime())) return d;
+    }
     const weeks = Array.from(new Set(games.map((g) => g.week_number || 0))).sort(
       (a, b) => a - b
     );
@@ -707,7 +722,7 @@ export default function SchedulePage() {
                     </CardTitle>
                     {gs.generatedAt && (
                       <p className="text-xs text-emerald-900/60 mt-0.5">
-                        Last generated {format(new Date(gs.generatedAt), "MMM d 'at' h:mm a")}
+                        Last generated {safeFormat(gs.generatedAt, "MMM d 'at' h:mm a")}
                       </p>
                     )}
                   </div>
@@ -860,43 +875,49 @@ export default function SchedulePage() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuLabel className="text-xs">Full season</DropdownMenuLabel>
-                  <DropdownMenuItem onClick={() => exportPdf(games, " - Schedule")}>
-                    PDF
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => exportXlsx(games, " - Schedule")}>
-                    XLSX
-                  </DropdownMenuItem>
+                  <DropdownMenuGroup>
+                    <DropdownMenuLabel className="text-xs">Full season</DropdownMenuLabel>
+                    <DropdownMenuItem onClick={() => exportPdf(games, " - Schedule")}>
+                      PDF
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => exportXlsx(games, " - Schedule")}>
+                      XLSX
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
                   {halfSeasonCutoff && (
                     <>
                       <DropdownMenuSeparator />
-                      <DropdownMenuLabel className="text-xs">
-                        First half (before {format(halfSeasonCutoff, "MMM d")})
-                      </DropdownMenuLabel>
-                      <DropdownMenuItem
-                        onClick={() => exportPdf(gamesBeforeCutoff(), " - First Half")}
-                      >
-                        PDF
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={() => exportXlsx(gamesBeforeCutoff(), " - First Half")}
-                      >
-                        XLSX
-                      </DropdownMenuItem>
+                      <DropdownMenuGroup>
+                        <DropdownMenuLabel className="text-xs">
+                          First half (before {safeFormat(halfSeasonCutoff, "MMM d")})
+                        </DropdownMenuLabel>
+                        <DropdownMenuItem
+                          onClick={() => exportPdf(gamesBeforeCutoff(), " - First Half")}
+                        >
+                          PDF
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => exportXlsx(gamesBeforeCutoff(), " - First Half")}
+                        >
+                          XLSX
+                        </DropdownMenuItem>
+                      </DropdownMenuGroup>
                       <DropdownMenuSeparator />
-                      <DropdownMenuLabel className="text-xs">
-                        Second half (on/after {format(halfSeasonCutoff, "MMM d")})
-                      </DropdownMenuLabel>
-                      <DropdownMenuItem
-                        onClick={() => exportPdf(gamesAfterCutoff(), " - Second Half")}
-                      >
-                        PDF
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={() => exportXlsx(gamesAfterCutoff(), " - Second Half")}
-                      >
-                        XLSX
-                      </DropdownMenuItem>
+                      <DropdownMenuGroup>
+                        <DropdownMenuLabel className="text-xs">
+                          Second half (on/after {safeFormat(halfSeasonCutoff, "MMM d")})
+                        </DropdownMenuLabel>
+                        <DropdownMenuItem
+                          onClick={() => exportPdf(gamesAfterCutoff(), " - Second Half")}
+                        >
+                          PDF
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => exportXlsx(gamesAfterCutoff(), " - Second Half")}
+                        >
+                          XLSX
+                        </DropdownMenuItem>
+                      </DropdownMenuGroup>
                     </>
                   )}
                 </DropdownMenuContent>
@@ -1057,7 +1078,7 @@ export default function SchedulePage() {
                                           {teamsMap.get(game.home_team_id)?.name} vs {teamsMap.get(game.away_team_id)?.name}
                                         </p>
                                         <p className="text-xs text-muted-foreground">
-                                          {format(new Date(game.scheduled_at), "EEE, MMM d 'at' h:mm a")}
+                                          {safeFormat(game.scheduled_at, "EEE, MMM d 'at' h:mm a")}
                                           {game.court && ` (${game.court})`}
                                         </p>
                                       </div>
@@ -1169,7 +1190,7 @@ export default function SchedulePage() {
                                         />
                                       </div>
                                       <p className="text-xs text-muted-foreground">
-                                        {format(new Date(game.scheduled_at), "EEE, MMM d 'at' h:mm a")}
+                                        {safeFormat(game.scheduled_at, "EEE, MMM d 'at' h:mm a")}
                                         {game.court && ` (${game.court})`}
                                       </p>
                                       {game.scheduling_notes && (
@@ -1275,7 +1296,7 @@ export default function SchedulePage() {
                         {homeTeam?.name ?? "TBD"} vs {awayTeam?.name ?? "TBD"}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        {format(new Date(game.scheduled_at), "EEE, MMM d 'at' h:mm a")}
+                        {safeFormat(game.scheduled_at, "EEE, MMM d 'at' h:mm a")}
                       </p>
                     </div>
                     <Badge variant="secondary" className="text-xs text-amber-600 bg-amber-50 border-amber-200">
