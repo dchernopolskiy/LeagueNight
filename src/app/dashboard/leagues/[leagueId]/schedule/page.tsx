@@ -319,32 +319,42 @@ export default function SchedulePage() {
     return games.filter((g) => new Date(g.scheduled_at) >= halfSeasonCutoff);
   }
 
+  // Deferred runner — escapes React's synthetic-event dispatch so a throw
+  // surfaces via window.onerror and our catch, not the dashboard error
+  // boundary (which would blank the page). Base UI Menu closes the popup
+  // before the click handler returns, and errors thrown mid-close have been
+  // observed to bubble into the parent boundary instead of our try/catch.
+  function runExport(label: string, work: () => void) {
+    setExportError(null);
+    setTimeout(() => {
+      try {
+        work();
+      } catch (err) {
+        console.error(`[${label}]`, err);
+        const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+        setExportError(msg);
+      }
+    }, 0);
+  }
+
   function exportPdf(filtered: Game[], suffix: string) {
     if (!league) return;
-    try {
-      setExportError(null);
+    runExport("schedule pdf export", () => {
       const doc = generateSchedulePdf({ league, teams, players, games: filtered });
       doc.save(`${league.name}${suffix}.pdf`);
-    } catch (err) {
-      console.error("[schedule pdf export]", err);
-      setExportError(err instanceof Error ? err.message : "PDF export failed");
-    }
+    });
   }
 
   function exportXlsx(filtered: Game[], suffix: string) {
     if (!league) return;
-    try {
-      setExportError(null);
+    runExport("schedule xlsx export", () => {
       exportLeagueScheduleXlsx({
         league,
         teams,
         games: filtered,
         filename: `${league.name}${suffix}.xlsx`,
       });
-    } catch (err) {
-      console.error("[schedule xlsx export]", err);
-      setExportError(err instanceof Error ? err.message : "XLSX export failed");
-    }
+    });
   }
 
   async function cancelGame(gameId: string) {
