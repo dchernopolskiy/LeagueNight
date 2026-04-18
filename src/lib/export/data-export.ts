@@ -277,6 +277,12 @@ interface LeagueScheduleInput {
   filename: string;
 }
 
+// Excel sheet names: max 31 chars, no [ ] : * ? / \ chars, can't be blank.
+function sanitizeSheetName(raw: string, fallback = "Schedule"): string {
+  const cleaned = raw.replace(/[\[\]\:\*\?\/\\]/g, " ").trim().slice(0, 31);
+  return cleaned.length > 0 ? cleaned : fallback;
+}
+
 export function exportLeagueScheduleXlsx({ league, teams, games, filename }: LeagueScheduleInput) {
   const teamMap = new Map(teams.map((t) => [t.id, t]));
   const sorted = [...games].sort(
@@ -295,7 +301,7 @@ export function exportLeagueScheduleXlsx({ league, teams, games, filename }: Lea
   }));
   const wb = XLSX.utils.book_new();
   const ws = buildSheet(rows, "Schedule");
-  XLSX.utils.book_append_sheet(wb, ws, league.name.slice(0, 28) || "Schedule");
+  XLSX.utils.book_append_sheet(wb, ws, sanitizeSheetName(league.name));
   XLSX.utils.sheet_add_aoa(ws, [[generatedLine()]], { origin: -1 });
   saveXlsx(wb, filename);
 }

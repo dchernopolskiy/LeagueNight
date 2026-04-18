@@ -82,6 +82,7 @@ export default function SchedulePage() {
 
   const [generating, setGenerating] = useState(false);
   const [schedulingWarnings, setSchedulingWarnings] = useState<string[]>([]);
+  const [exportError, setExportError] = useState<string | null>(null);
   const [preflightPrompt, setPreflightPrompt] = useState<{
     message: string;
     preflight: {
@@ -98,7 +99,7 @@ export default function SchedulePage() {
     regenerateFrom: string;
     message: string;
   } | null>(null);
-  const [generationStats, setGenerationStats] = useState<{
+  type GenerationStats = {
     count: number;
     targetWeeks: number;
     byes: Array<{ teamId: string; weekNumber: number; backToBack: boolean }>;
@@ -110,7 +111,32 @@ export default function SchedulePage() {
       availableWeeks: number;
       matchupFrequency: number;
     };
-  } | null>(null);
+    generatedAt: string;
+  };
+  const generationStatsKey = `bw:genstats:${leagueId}`;
+  const [generationStats, setGenerationStatsState] = useState<GenerationStats | null>(null);
+  const setGenerationStats = useCallback(
+    (next: GenerationStats | null) => {
+      setGenerationStatsState(next);
+      if (typeof window === "undefined") return;
+      if (next) {
+        window.sessionStorage.setItem(generationStatsKey, JSON.stringify(next));
+      } else {
+        window.sessionStorage.removeItem(generationStatsKey);
+      }
+    },
+    [generationStatsKey]
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const raw = window.sessionStorage.getItem(generationStatsKey);
+    if (!raw) return;
+    try {
+      setGenerationStatsState(JSON.parse(raw) as GenerationStats);
+    } catch {
+      window.sessionStorage.removeItem(generationStatsKey);
+    }
+  }, [generationStatsKey]);
 
   // Fetch locations separately (organizer-scoped, not league-scoped)
   const [locations, setLocations] = useState<Location[]>([]);
@@ -254,6 +280,7 @@ export default function SchedulePage() {
         byes: data.byes ?? [],
         droppedPairs: data.droppedPairs ?? [],
         preflight: data.preflight,
+        generatedAt: new Date().toISOString(),
       });
       await refetchLeague();
     } else {
@@ -294,18 +321,30 @@ export default function SchedulePage() {
 
   function exportPdf(filtered: Game[], suffix: string) {
     if (!league) return;
-    const doc = generateSchedulePdf({ league, teams, players, games: filtered });
-    doc.save(`${league.name}${suffix}.pdf`);
+    try {
+      setExportError(null);
+      const doc = generateSchedulePdf({ league, teams, players, games: filtered });
+      doc.save(`${league.name}${suffix}.pdf`);
+    } catch (err) {
+      console.error("[schedule pdf export]", err);
+      setExportError(err instanceof Error ? err.message : "PDF export failed");
+    }
   }
 
   function exportXlsx(filtered: Game[], suffix: string) {
     if (!league) return;
-    exportLeagueScheduleXlsx({
-      league,
-      teams,
-      games: filtered,
-      filename: `${league.name}${suffix}.xlsx`,
-    });
+    try {
+      setExportError(null);
+      exportLeagueScheduleXlsx({
+        league,
+        teams,
+        games: filtered,
+        filename: `${league.name}${suffix}.xlsx`,
+      });
+    } catch (err) {
+      console.error("[schedule xlsx export]", err);
+      setExportError(err instanceof Error ? err.message : "XLSX export failed");
+    }
   }
 
   async function cancelGame(gameId: string) {
@@ -652,9 +691,16 @@ export default function SchedulePage() {
             <Card className="border-emerald-200 bg-emerald-50/50">
               <CardHeader>
                 <div className="flex items-center justify-between">
-                  <CardTitle className="text-base text-emerald-800">
-                    Generation summary
-                  </CardTitle>
+                  <div>
+                    <CardTitle className="text-base text-emerald-800">
+                      Generation summary
+                    </CardTitle>
+                    {gs.generatedAt && (
+                      <p className="text-xs text-emerald-900/60 mt-0.5">
+                        Last generated {format(new Date(gs.generatedAt), "MMM d 'at' h:mm a")}
+                      </p>
+                    )}
+                  </div>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -681,7 +727,7 @@ export default function SchedulePage() {
                     label="Biggest division"
                     value={`${gs.preflight.biggestDivisionName ?? "—"} (${gs.preflight.biggestDivisionSize})`}
                   />
-                  <Stat label="BYE weeks" value={totalByes} />
+                  <Stat label="Total BYEs" value={totalByes} />
                   <Stat
                     label="Back-to-back BYEs"
                     value={backToBackByes}
@@ -743,6 +789,31 @@ export default function SchedulePage() {
                 Dismiss
               </Button>
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Export error */}
+      {exportError && (
+        <Card className="border-red-300 bg-red-50">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base flex items-center gap-2 text-red-800">
+                <AlertTriangle className="h-4 w-4" />
+                Export failed
+              </CardTitle>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 p-0 text-red-700"
+                onClick={() => setExportError(null)}
+              >
+                <X className="h-3 w-3" />
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-red-900 font-mono break-words">{exportError}</p>
           </CardContent>
         </Card>
       )}
