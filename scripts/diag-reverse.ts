@@ -16,7 +16,7 @@ async function main() {
   if (!leagues?.length) return;
   const leagueId = leagues[0].id;
   const [{ data: teams }, { data: divs }, { data: patterns }, { data: games }] = await Promise.all([
-    supabase.from("teams").select("id, name, division_id").eq("league_id", leagueId),
+    supabase.from("teams").select("id, name, division_id, preferences").eq("league_id", leagueId),
     supabase.from("divisions").select("id, name").eq("league_id", leagueId),
     supabase.from("game_day_patterns").select("*").eq("league_id", leagueId),
     supabase.from("games").select("week_number").eq("league_id", leagueId).eq("is_playoff", false).eq("status", "scheduled"),
