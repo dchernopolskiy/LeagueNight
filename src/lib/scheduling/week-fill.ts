@@ -369,6 +369,11 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
   const WITHIN_DIV_NEEDED_BONUS = 30;
   const BYE_PREF_PENALTY = 1000;
   const CAME_OFF_BYE_BONUS = 80; // strong incentive: don't leave a team BYE'd two weeks running
+  // Playing a team's two games in adjacent buckets (no 45-min gap) is a strong
+  // nice-to-have. Stronger than CROSS_DIV_PENALTY so adjacency can pull a
+  // cross-div filler in when within-div has nothing adjacent.
+  const ADJACENT_BUCKET_BONUS = 60;
+  const GAP_BUCKET_PENALTY = 25; // per bucket of gap between a team's games
   // Re-seed mode: prioritize 0.65 no-repeat vs 0.35 skill-alignment per design.
   // REPEAT_PENALTY is 50 → skill bonus max should be ~27 to hit 0.65/0.35 ratio
   // against a single prior play. Use 27 as the max for (1 - |wA - wB|).
@@ -379,7 +384,9 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
     week: number,
     slotTimeDate: Date,
     isEarly: boolean,
-    isLate: boolean
+    isLate: boolean,
+    currentBucket: number,
+    lastBucketByTeam: Map<string, number>
   ): { score: number; applied: PreferenceApplied; notes: string[] } | null {
     const stateA = teamState.get(pair.teamA)!;
     const stateB = teamState.get(pair.teamB)!;
@@ -390,6 +397,19 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
 
     // Repeat penalty scales with prior plays.
     score -= REPEAT_PENALTY * pair.playedCount;
+
+    // Adjacency within the same night: reward placing a team's second game in
+    // the bucket right after its first. Penalize a gap.
+    for (const tid of [pair.teamA, pair.teamB]) {
+      const last = lastBucketByTeam.get(tid);
+      if (last === undefined) continue;
+      const gap = currentBucket - last;
+      if (gap === 1) {
+        score += ADJACENT_BUCKET_BONUS;
+      } else if (gap > 1) {
+        score -= GAP_BUCKET_PENALTY * (gap - 1);
+      }
+    }
 
     // Within-div + not yet at target = strong preference.
     if (!pair.crossDiv && pair.playedCount < pair.targetCount) {
@@ -554,6 +574,7 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
     const gamesThisWeek = new Map<string, number>(); // teamId -> count this week
     const slotTeams = new Map<number, Set<string>>(); // slotBucket -> teams playing in that time bucket
     const usedSlots = new Set<number>(); // slot indices used (court + time combined)
+    const lastBucketByTeam = new Map<string, number>(); // teamId -> most recent bucket played this week
     for (const t of teams) gamesThisWeek.set(t.id, 0);
 
     const totalSlots = slotsPerDay * courtCount;
@@ -607,6 +628,8 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
         teamsInBucket.add(seed.b);
         slotTeams.set(bucket, teamsInBucket);
         usedSlots.add(slotIdx);
+        lastBucketByTeam.set(seed.a, bucket);
+        lastBucketByTeam.set(seed.b, bucket);
         break;
       }
     }
@@ -635,7 +658,7 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
         // heavily penalized in scorePair so crossplay wins when available.
         if (!pair.crossDiv && pair.playedCount === 0) continue;
 
-        const scored = scorePair(pair, weekNumber, slotDate, isEarly, isLate);
+        const scored = scorePair(pair, weekNumber, slotDate, isEarly, isLate, bucket, lastBucketByTeam);
         if (!scored) continue;
         if (scored.score > bestScore) {
           bestScore = scored.score;
@@ -672,6 +695,8 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
       teamsInBucket.add(pair.teamB);
       slotTeams.set(bucket, teamsInBucket);
       usedSlots.add(slotIdx);
+      lastBucketByTeam.set(pair.teamA, bucket);
+      lastBucketByTeam.set(pair.teamB, bucket);
     }
 
     // Record BYEs: teams that played fewer than gamesPerSession this week.
@@ -695,6 +720,165 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
   }
 
 
+  // ── BYE repair pass ───────────────────────────────────────────────────────
+  //
+  // Greedy fill can leave a team with back-to-back BYEs. We try to break each
+  // streak by swapping an existing game's participant for the BYE'd team when
+  // the result is a legal pair. This may introduce a cross-div repeat for the
+  // displaced team, but user-stated preference is "drop a cross-div pairing to
+  // avoid back-to-back BYEs." No new games are created; only swaps.
+
+  const byesByTeamWeek = new Map<string, Set<number>>();
+  for (const b of byeRecords) {
+    const s = byesByTeamWeek.get(b.teamId) || new Set<number>();
+    s.add(b.weekNumber);
+    byesByTeamWeek.set(b.teamId, s);
+  }
+
+  function hasByeInWeek(teamId: string, week: number): boolean {
+    return byesByTeamWeek.get(teamId)?.has(week) || false;
+  }
+
+  const repairLog: string[] = [];
+
+  // Collect back-to-back BYE cases (team, weekNumber). Repair week-by-week so
+  // earlier fixes can unblock later ones.
+  const backToBackCases: Array<{ teamId: string; week: number }> = [];
+  for (const b of byeRecords) {
+    if (b.backToBack) backToBackCases.push({ teamId: b.teamId, week: b.weekNumber });
+  }
+  backToBackCases.sort((a, b) => a.week - b.week);
+
+  for (const bb of backToBackCases) {
+    const { teamId: T, week: W } = bb;
+    // Still BYE'd? (earlier repair may have already placed T)
+    if (!hasByeInWeek(T, W)) continue;
+
+    // Candidate games in week W we could swap into.
+    const weekGames = resultGames
+      .map((g, idx) => ({ g, idx }))
+      .filter(({ g }) => g.weekNumber === W);
+
+    let swapped = false;
+    for (const { g, idx } of weekGames) {
+      // Can't insert T if T already plays this exact time bucket.
+      const bucket = g.scheduledAt.getTime();
+      const tAlreadyInBucket = resultGames.some(
+        (other) =>
+          other.weekNumber === W &&
+          other.scheduledAt.getTime() === bucket &&
+          (other.home === T || other.away === T)
+      );
+      if (tAlreadyInBucket) continue;
+
+      // Try replacing home then away with T.
+      for (const replaceSide of ["home", "away"] as const) {
+        const keepSide = replaceSide === "home" ? "away" : "home";
+        const displaced = g[replaceSide];
+        const partner = g[keepSide];
+        if (displaced === T || partner === T) continue;
+
+        // (T, partner) must be a legal pair.
+        const key = pairKey(T, partner);
+        if (!pairs.has(key)) continue;
+
+        // Displacing would give the displaced team one fewer game — only OK
+        // when that doesn't create a new back-to-back BYE for them.
+        const displacedGamesInWeekW = resultGames.filter(
+          (o, oIdx) =>
+            oIdx !== idx &&
+            o.weekNumber === W &&
+            (o.home === displaced || o.away === displaced)
+        ).length;
+        // After swap, displaced plays `displacedGamesInWeekW` in week W. If 0,
+        // the displaced team gets a new BYE — check week W-1 and W+1.
+        if (displacedGamesInWeekW === 0) {
+          const adjByeBefore = hasByeInWeek(displaced, W - 1);
+          const adjByeAfter = hasByeInWeek(displaced, W + 1);
+          if (adjByeBefore || adjByeAfter) continue;
+        }
+
+        // Perform swap.
+        resultGames[idx] = {
+          ...g,
+          [replaceSide]: T,
+        } as WeekFillScheduledGame;
+
+        // Update BYE records.
+        const tBye = byesByTeamWeek.get(T);
+        tBye?.delete(W);
+        if (displacedGamesInWeekW === 0) {
+          const dSet = byesByTeamWeek.get(displaced) || new Set<number>();
+          dSet.add(W);
+          byesByTeamWeek.set(displaced, dSet);
+        }
+
+        // Update pair playedCount: old pair loses one, new pair gains one.
+        const oldPair = pairs.get(pairKey(g.home, g.away));
+        if (oldPair) {
+          oldPair.playedCount = Math.max(0, oldPair.playedCount - 1);
+          oldPair.exhausted = oldPair.playedCount >= oldPair.targetCount;
+        }
+        const newPair = pairs.get(key);
+        if (newPair) {
+          newPair.playedCount += 1;
+          newPair.exhausted = newPair.playedCount >= newPair.targetCount;
+        }
+
+        repairLog.push(
+          `Week ${W}: swapped ${teamsMap.get(displaced)?.name || displaced} → ${teamsMap.get(T)?.name || T} to avoid back-to-back BYE`
+        );
+        swapped = true;
+        break;
+      }
+      if (swapped) break;
+    }
+  }
+
+  // Rebuild byeRecords from the updated games so downstream consumers see the
+  // repaired state (with `backToBack` flags recomputed).
+  const repairedByes: WeekFillResult["byes"] = [];
+  const lastByeByTeam = new Map<string, number>();
+  const playedByTeamWeek = new Map<string, Map<number, number>>();
+  for (const g of resultGames) {
+    for (const tid of [g.home, g.away]) {
+      const m = playedByTeamWeek.get(tid) || new Map<number, number>();
+      m.set(g.weekNumber, (m.get(g.weekNumber) || 0) + 1);
+      playedByTeamWeek.set(tid, m);
+    }
+  }
+  for (let w = 1; w <= weeksToFill; w++) {
+    const dayDate = gameDays[w - 1];
+    for (const t of teams) {
+      const played = playedByTeamWeek.get(t.id)?.get(w) || 0;
+      if (played < opts.gamesPerSession) {
+        const prev = lastByeByTeam.get(t.id);
+        const backToBack = prev === w - 1 && w > 1;
+        repairedByes.push({ teamId: t.id, date: dayDate, weekNumber: w, backToBack });
+        lastByeByTeam.set(t.id, w);
+      }
+    }
+  }
+
+  // ── Simulated annealing post-pass ─────────────────────────────────────────
+  //
+  // The greedy + repair pass is locally good but misses globally-better
+  // arrangements. SA does random bucket-swaps (move a game from slot X to
+  // slot Y on the same night, swapping with whatever was at Y), accepts
+  // improvements always and worsenings with probability e^(-Δ/T). Swaps never
+  // change games-per-team counts, so they preserve the repair invariants.
+  //
+  // The swap move operates on time buckets within one night, which is exactly
+  // what we need to fix the "45-min gap between a team's two games" case.
+
+  const saLog = annealSchedule({
+    games: resultGames,
+    teams,
+    gamesPerSession: opts.gamesPerSession,
+    iterations: Math.min(2000, resultGames.length * 20),
+    seed: 0x5a_5a_5a_5a,
+  });
+
   // Dropped pairs report
   const droppedPairs: WeekFillResult["droppedPairs"] = [];
   for (const p of pairs.values()) {
@@ -708,12 +892,164 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
     }
   }
 
+  // Rebuild BYE records one more time: SA may have moved games between buckets
+  // but never changes which team plays which week, so the BYE structure is
+  // stable. Keep the post-repair records.
+  void saLog;
+
   return {
     games: resultGames,
-    byes: byeRecords,
-    notes: weekNotes,
+    byes: repairedByes,
+    notes: [...weekNotes, ...repairLog],
     droppedPairs,
     targetWeeks,
     availableWeeks: allGameDays.length,
   };
+}
+
+// ── Simulated annealing ─────────────────────────────────────────────────────
+
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6d_2b_79_f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+  };
+}
+
+interface AnnealParams {
+  games: WeekFillScheduledGame[];
+  teams: WeekFillTeam[];
+  gamesPerSession: number;
+  iterations: number;
+  seed: number;
+}
+
+/**
+ * Mutate `games` in place, swapping within-night bucket assignments to
+ * minimize a gap-penalty + time-preference-conflict objective. Returns a
+ * short log of accepted moves (empty in prod; useful for tests).
+ */
+function annealSchedule(params: AnnealParams): string[] {
+  const { games, iterations, seed } = params;
+  if (games.length < 2 || iterations <= 0) return [];
+
+  const rng = mulberry32(seed);
+
+  // Group game indices by date (night). SA swaps within a night only — swapping
+  // across nights would affect per-week BYE structure.
+  const gamesByNight = new Map<string, number[]>();
+  for (let i = 0; i < games.length; i++) {
+    const key = formatYMD(games[i].scheduledAt);
+    const arr = gamesByNight.get(key) || [];
+    arr.push(i);
+    gamesByNight.set(key, arr);
+  }
+  const nights = [...gamesByNight.values()].filter((arr) => arr.length >= 2);
+  if (nights.length === 0) return [];
+
+  // Objective: sum over teams of (max_bucket − min_bucket − gamesCount + 1),
+  // i.e. count of "empty buckets between a team's games" per night. Zero when
+  // a team's games are perfectly adjacent.
+  function nightGapPenalty(indices: number[]): number {
+    const byTeam = new Map<string, number[]>();
+    for (const i of indices) {
+      const g = games[i];
+      const bucket = g.scheduledAt.getTime();
+      for (const tid of [g.home, g.away]) {
+        const arr = byTeam.get(tid) || [];
+        arr.push(bucket);
+        byTeam.set(tid, arr);
+      }
+    }
+    let penalty = 0;
+    for (const buckets of byTeam.values()) {
+      if (buckets.length < 2) continue;
+      buckets.sort((a, b) => a - b);
+      // Sum consecutive gaps beyond the minimum (1 bucket = adjacent).
+      for (let k = 1; k < buckets.length; k++) {
+        const gap = buckets[k] - buckets[k - 1];
+        if (gap > 0) penalty += Math.floor(gap / 60_000 / 15); // 15-min units
+      }
+    }
+    return penalty;
+  }
+
+  // Swap the scheduledAt (and court) of two games on the same night. The swap
+  // is always legal structurally (each team still plays the same games), but
+  // we must reject swaps that would double-book a team in one bucket.
+  function tryApplySwap(indices: number[], i: number, j: number): boolean {
+    if (i === j) return false;
+    const gi = games[indices[i]];
+    const gj = games[indices[j]];
+    if (gi.scheduledAt.getTime() === gj.scheduledAt.getTime()) return false;
+
+    // Check: after swap, no team appears twice in the same bucket.
+    const teamsAtBucket = new Map<number, Set<string>>();
+    for (let k = 0; k < indices.length; k++) {
+      const g = games[indices[k]];
+      let b = g.scheduledAt.getTime();
+      if (k === i) b = gj.scheduledAt.getTime();
+      else if (k === j) b = gi.scheduledAt.getTime();
+      const set = teamsAtBucket.get(b) || new Set<string>();
+      if (set.has(g.home) || set.has(g.away)) return false;
+      set.add(g.home);
+      set.add(g.away);
+      teamsAtBucket.set(b, set);
+    }
+    return true;
+  }
+
+  function doSwap(indices: number[], i: number, j: number): void {
+    const gi = games[indices[i]];
+    const gj = games[indices[j]];
+    const tmpAt = gi.scheduledAt;
+    const tmpCourt = gi.court;
+    games[indices[i]] = { ...gi, scheduledAt: gj.scheduledAt, court: gj.court };
+    games[indices[j]] = { ...gj, scheduledAt: tmpAt, court: tmpCourt };
+  }
+
+  const log: string[] = [];
+  let temperature = 1.0;
+  const cooling = 0.999;
+
+  let currentPenalty = 0;
+  for (const indices of nights) currentPenalty += nightGapPenalty(indices);
+
+  for (let iter = 0; iter < iterations; iter++) {
+    const nightIdx = Math.floor(rng() * nights.length);
+    const indices = nights[nightIdx];
+    const i = Math.floor(rng() * indices.length);
+    const j = Math.floor(rng() * indices.length);
+
+    const beforeNight = nightGapPenalty(indices);
+    if (!tryApplySwap(indices, i, j)) {
+      temperature *= cooling;
+      continue;
+    }
+    doSwap(indices, i, j);
+    const afterNight = nightGapPenalty(indices);
+    const delta = afterNight - beforeNight;
+
+    if (delta <= 0) {
+      currentPenalty += delta;
+    } else {
+      const accept = Math.exp(-delta / Math.max(0.01, temperature));
+      if (rng() < accept) {
+        currentPenalty += delta;
+      } else {
+        // Revert.
+        doSwap(indices, i, j);
+      }
+    }
+    temperature *= cooling;
+  }
+
+  if (currentPenalty >= 0) {
+    log.push(`SA final gap-penalty: ${currentPenalty}`);
+  }
+  return log;
 }

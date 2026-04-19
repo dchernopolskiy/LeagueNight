@@ -213,6 +213,98 @@ describe("scheduler: tiny 4-team league", () => {
   });
 });
 
+describe("scheduler: within-night adjacency", () => {
+  it("schedules a team's two games in adjacent buckets when possible", () => {
+    // 4 teams, gamesPerSession=2, 1 court → 4 buckets per night.
+    // Each team plays twice; ideal is buckets [k, k+1] not [k, k+2].
+    const teams = mkTeams(4, "d1", "T");
+    const { weekFillTeams, teamsMap } = buildTeams(teams);
+    const pattern = defaultPattern({
+      courtCount: 1,
+      // 2 hours total / 30-min games = 4 slots per night
+      startTime: "18:00",
+      endTime: "20:00",
+      durationMinutes: 30,
+      endsOn: new Date("2026-01-19"), // 3 Mondays
+    });
+
+    const result = fillScheduleByWeek({
+      teams: weekFillTeams,
+      pattern,
+      opts: {
+        matchupFrequency: 1,
+        gamesPerSession: 2,
+        allowCrossPlay: false,
+        gamesPerTeam: 6,
+      },
+      teamsMap,
+    });
+
+    // Count total gap-bucket-units across all teams and nights. 0 gap = every
+    // team's two games are back-to-back. Allow small slack for hard cases.
+    const byNight = new Map<string, typeof result.games>();
+    for (const g of result.games) {
+      const k = g.scheduledAt.toISOString().slice(0, 10);
+      const arr = byNight.get(k) || [];
+      arr.push(g);
+      byNight.set(k, arr);
+    }
+    let totalGap = 0;
+    for (const games of byNight.values()) {
+      const byTeam = new Map<string, number[]>();
+      for (const g of games) {
+        for (const tid of [g.home, g.away]) {
+          const arr = byTeam.get(tid) || [];
+          arr.push(g.scheduledAt.getTime());
+          byTeam.set(tid, arr);
+        }
+      }
+      for (const buckets of byTeam.values()) {
+        if (buckets.length < 2) continue;
+        buckets.sort((a, b) => a - b);
+        for (let k = 1; k < buckets.length; k++) {
+          const slots = (buckets[k] - buckets[k - 1]) / (30 * 60_000) - 1;
+          totalGap += Math.max(0, slots);
+        }
+      }
+    }
+    // A 4-team 4-bucket night has a pairing-structure lower bound: when two
+    // games share a bucket, the teams across them have their second game in
+    // the adjacent bucket, but the other two teams end up with a 1-slot gap.
+    // So gap=2 per night × 2 nights = 4 is the worst greedy could produce;
+    // adjacency bonus + SA should hit the structural minimum (~2).
+    expect(totalGap).toBeLessThanOrEqual(3);
+  });
+});
+
+describe("scheduler: BYE repair", () => {
+  it("minimizes back-to-back BYEs in a 7-team odd league", () => {
+    const teams = mkTeams(7, "d1", "T");
+    const { weekFillTeams, teamsMap } = buildTeams(teams);
+    const pattern = defaultPattern({
+      courtCount: 3,
+      endsOn: new Date("2026-02-23"),
+    });
+
+    const result = fillScheduleByWeek({
+      teams: weekFillTeams,
+      pattern,
+      opts: {
+        matchupFrequency: 1,
+        gamesPerSession: 1,
+        allowCrossPlay: false,
+        gamesPerTeam: 6,
+      },
+      teamsMap,
+    });
+
+    const backToBack = result.byes.filter((b) => b.backToBack).length;
+    // 7 teams with 1 BYE per week for 7 weeks = 7 total BYEs; a random
+    // arrangement averages ~1 back-to-back. Repair should drive it to 0 or 1.
+    expect(backToBack).toBeLessThanOrEqual(1);
+  });
+});
+
 describe("scheduler: truncation under tight calendar", () => {
   it("reports droppedPairs when endsOn forces truncation", () => {
     const teams = mkTeams(8, "d1", "T");
