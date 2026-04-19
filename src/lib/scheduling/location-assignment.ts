@@ -97,18 +97,20 @@ function assignDateGames(
   for (const component of sortedComponents) {
     let bestLocationId: string | null = null;
     let bestScore = Number.NEGATIVE_INFINITY;
+    let bestFits = false;
 
     for (const locationId of locationIds) {
       const capacity = slotsByLocation.get(locationId)?.length || 0;
       const loads = locationLoadByTime.get(locationId)!;
+      let overflow = 0;
       let fits = true;
       for (const [time, required] of component.requiredByTime) {
-        if ((loads.get(time) || 0) + required > capacity) {
+        const excess = (loads.get(time) || 0) + required - capacity;
+        if (excess > 0) {
           fits = false;
-          break;
+          overflow += excess;
         }
       }
-      if (!fits) continue;
 
       let score = 0;
       const componentDivisions = divisionsForComponent(component, teamDivisionIds);
@@ -117,8 +119,17 @@ function assignDateGames(
       }
       score -= locationTotalGames.get(locationId) || 0;
       score -= capacity * 0.01;
+      // Prefer a location that fits cleanly; penalize overflow heavily but
+      // don't disqualify — splitting a component across venues is the worst
+      // outcome, because it ruins per-team venue consistency within a night.
+      if (!fits) score -= 10_000 * overflow;
 
-      if (score > bestScore) {
+      if (fits && !bestFits) {
+        // First location that fits wins against any overflow candidate.
+        bestFits = true;
+        bestScore = score;
+        bestLocationId = locationId;
+      } else if (fits === bestFits && score > bestScore) {
         bestScore = score;
         bestLocationId = locationId;
       }
@@ -148,6 +159,17 @@ function assignDateGames(
   for (const component of gamesByComponent) {
     for (const game of component.games) {
       componentByGame.set(game, component);
+    }
+  }
+
+  // Seed teamLocation from componentLocation so games forced to fallback
+  // (because the component didn't fit its chosen venue) still know their
+  // team's "home for this night" and cluster there when possible.
+  for (const component of gamesByComponent) {
+    const locId = componentLocation.get(component.id);
+    if (!locId) continue;
+    for (const teamId of component.teamIds) {
+      if (!teamLocation.has(teamId)) teamLocation.set(teamId, locId);
     }
   }
 
