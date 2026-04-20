@@ -55,6 +55,7 @@ async function loadHighs(): Promise<HighsModule> {
 }
 
 const PENALTY_GAP = 100;
+const PENALTY_LATER_BUCKET = 1;
 const PENALTY_SKIP = 10_000; // never leave a game unplaced; acts as hard
 
 function sanitize(s: string): string {
@@ -105,6 +106,9 @@ export function buildPhase2LP(input: Phase2Input): {
       for (let c = 1; c <= courtsPerBucket; c++) {
         const v = yVar(g.id, b, c);
         binaries.push(v);
+        if (b > 0) {
+          objectiveTerms.push(`${PENALTY_LATER_BUCKET * b} ${v}`);
+        }
         gameKeyByVar.set(v, { gameId: g.id, bucket: b, court: c });
       }
     }

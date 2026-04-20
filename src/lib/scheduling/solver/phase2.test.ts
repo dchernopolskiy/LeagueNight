@@ -27,6 +27,21 @@ describe("Phase 2: slot/court ILP", () => {
     expect(byBucket.size).toBe(2);
   });
 
+  it("uses parallel courts before spilling games into later buckets", async () => {
+    const games: Phase2Game[] = [
+      { id: "g1", pairKey: "A|B", teamA: "A", teamB: "B" },
+      { id: "g2", pairKey: "C|D", teamA: "C", teamB: "D" },
+    ];
+    const result = await solvePhase2({
+      games,
+      buckets: 3,
+      courtsPerBucket: 2,
+    });
+
+    expect(result.status).toBe("Optimal");
+    expect(result.slots.map((s) => s.bucket).sort()).toEqual([0, 0]);
+  }, 15_000);
+
   it("keeps a team's two games in adjacent buckets", async () => {
     // Team X plays 2 games. Given 3 buckets × 2 courts, the optimal placement
     // puts X's games in bucket 0 and bucket 1 (adjacent). A non-adjacent
