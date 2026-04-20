@@ -1,11 +1,26 @@
 import { describe, it, expect } from "vitest";
-import { fillScheduleByWeek, schedulePreflight } from "./week-fill";
+import { schedulePreflight } from "./week-fill";
 import {
   buildTeams,
   checkInvariants,
   defaultPattern,
   type ScenarioTeam,
 } from "./__fixtures__/helpers";
+import { runScheduler, type SchedulerMode } from "./__fixtures__/run-scheduler";
+
+// Engines under test. Flip to ["greedy", "solver"] once the ILP models land;
+// the harness is already shape-compatible. Using `satisfies` so extending the
+// list surfaces any TS mismatch.
+const ENGINES: SchedulerMode[] = ["greedy"] satisfies SchedulerMode[];
+
+function perEngine(
+  name: string,
+  body: (mode: SchedulerMode) => void
+): void {
+  for (const mode of ENGINES) {
+    describe(`${name} [${mode}]`, () => body(mode));
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Scenarios
@@ -26,8 +41,8 @@ function mkTeams(count: number, division: string | null, prefix: string): Scenar
   }));
 }
 
-describe("scheduler: single-division round-robin", () => {
-  it("6-team league plays a full single round-robin in 5 weeks", () => {
+perEngine("scheduler: single-division round-robin", (mode) => {
+  it("6-team league plays a full single round-robin in 5 weeks", async () => {
     const teams = mkTeams(6, "d1", "T");
     const { weekFillTeams, teamsMap } = buildTeams(teams);
     const pattern = defaultPattern({
@@ -35,7 +50,7 @@ describe("scheduler: single-division round-robin", () => {
       endsOn: new Date("2026-02-16"), // ~6 Mondays available
     });
 
-    const result = fillScheduleByWeek({
+    const result = await runScheduler(mode, {
       teams: weekFillTeams,
       pattern,
       opts: {
@@ -60,7 +75,7 @@ describe("scheduler: single-division round-robin", () => {
     expect(report.stats.gamesPerTeam.max).toBe(5);
   });
 
-  it("odd-team count tolerates a per-week BYE", () => {
+  it("odd-team count tolerates a per-week BYE", async () => {
     const teams = mkTeams(7, "d1", "T");
     const { weekFillTeams, teamsMap } = buildTeams(teams);
     const pattern = defaultPattern({
@@ -68,7 +83,7 @@ describe("scheduler: single-division round-robin", () => {
       endsOn: new Date("2026-02-23"), // 7 Mondays
     });
 
-    const result = fillScheduleByWeek({
+    const result = await runScheduler(mode, {
       teams: weekFillTeams,
       pattern,
       opts: {
@@ -92,8 +107,8 @@ describe("scheduler: single-division round-robin", () => {
   });
 });
 
-describe("scheduler: multi-division with crossplay", () => {
-  it("A/B+/B with restricted crossplay (A↔B+, B+↔B only)", () => {
+perEngine("scheduler: multi-division with crossplay", (mode) => {
+  it("A/B+/B with restricted crossplay (A↔B+, B+↔B only)", async () => {
     const teams: ScenarioTeam[] = [
       ...mkTeams(5, "A", "A"),
       ...mkTeams(5, "BP", "BP"),
@@ -105,7 +120,7 @@ describe("scheduler: multi-division with crossplay", () => {
       endsOn: new Date("2026-04-27"),
     });
 
-    const result = fillScheduleByWeek({
+    const result = await runScheduler(mode, {
       teams: weekFillTeams,
       pattern,
       opts: {
@@ -139,8 +154,8 @@ describe("scheduler: multi-division with crossplay", () => {
   });
 });
 
-describe("scheduler: games_per_team > round-robin", () => {
-  it("extends season length to hit the games-per-team target", () => {
+perEngine("scheduler: games_per_team > round-robin", (mode) => {
+  it("extends season length to hit the games-per-team target", async () => {
     const teams = mkTeams(4, "d1", "T");
     const { weekFillTeams, teamsMap } = buildTeams(teams);
     const pattern = defaultPattern({
@@ -157,7 +172,7 @@ describe("scheduler: games_per_team > round-robin", () => {
     );
     expect(preflight.targetWeeks).toBeGreaterThanOrEqual(10);
 
-    const result = fillScheduleByWeek({
+    const result = await runScheduler(mode, {
       teams: weekFillTeams,
       pattern,
       opts: {
@@ -181,8 +196,8 @@ describe("scheduler: games_per_team > round-robin", () => {
   });
 });
 
-describe("scheduler: tiny 4-team league", () => {
-  it("schedules a minimal round-robin without collisions", () => {
+perEngine("scheduler: tiny 4-team league", (mode) => {
+  it("schedules a minimal round-robin without collisions", async () => {
     const teams = mkTeams(4, "d1", "T");
     const { weekFillTeams, teamsMap } = buildTeams(teams);
     const pattern = defaultPattern({
@@ -190,7 +205,7 @@ describe("scheduler: tiny 4-team league", () => {
       endsOn: new Date("2026-02-02"), // 4 Mondays
     });
 
-    const result = fillScheduleByWeek({
+    const result = await runScheduler(mode, {
       teams: weekFillTeams,
       pattern,
       opts: {
@@ -213,8 +228,8 @@ describe("scheduler: tiny 4-team league", () => {
   });
 });
 
-describe("scheduler: within-night adjacency", () => {
-  it("schedules a team's two games in adjacent buckets when possible", () => {
+perEngine("scheduler: within-night adjacency", (mode) => {
+  it("schedules a team's two games in adjacent buckets when possible", async () => {
     // 4 teams, gamesPerSession=2, 1 court → 4 buckets per night.
     // Each team plays twice; ideal is buckets [k, k+1] not [k, k+2].
     const teams = mkTeams(4, "d1", "T");
@@ -228,7 +243,7 @@ describe("scheduler: within-night adjacency", () => {
       endsOn: new Date("2026-01-19"), // 3 Mondays
     });
 
-    const result = fillScheduleByWeek({
+    const result = await runScheduler(mode, {
       teams: weekFillTeams,
       pattern,
       opts: {
@@ -277,8 +292,8 @@ describe("scheduler: within-night adjacency", () => {
   });
 });
 
-describe("scheduler: BYE repair", () => {
-  it("minimizes back-to-back BYEs in a 7-team odd league", () => {
+perEngine("scheduler: BYE repair", (mode) => {
+  it("minimizes back-to-back BYEs in a 7-team odd league", async () => {
     const teams = mkTeams(7, "d1", "T");
     const { weekFillTeams, teamsMap } = buildTeams(teams);
     const pattern = defaultPattern({
@@ -286,7 +301,7 @@ describe("scheduler: BYE repair", () => {
       endsOn: new Date("2026-02-23"),
     });
 
-    const result = fillScheduleByWeek({
+    const result = await runScheduler(mode, {
       teams: weekFillTeams,
       pattern,
       opts: {
@@ -305,8 +320,8 @@ describe("scheduler: BYE repair", () => {
   });
 });
 
-describe("scheduler: truncation under tight calendar", () => {
-  it("reports droppedPairs when endsOn forces truncation", () => {
+perEngine("scheduler: truncation under tight calendar", (mode) => {
+  it("reports droppedPairs when endsOn forces truncation", async () => {
     const teams = mkTeams(8, "d1", "T");
     const { weekFillTeams, teamsMap } = buildTeams(teams);
     // 8 teams → full RR = 7 weeks. Only 3 Mondays available.
@@ -324,7 +339,7 @@ describe("scheduler: truncation under tight calendar", () => {
     expect(preflight.fits).toBe(false);
     expect(preflight.droppedPairCount).toBeGreaterThan(0);
 
-    const result = fillScheduleByWeek({
+    const result = await runScheduler(mode, {
       teams: weekFillTeams,
       pattern,
       opts: {
