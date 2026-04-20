@@ -69,6 +69,16 @@ function Stat({ label, value, warn }: { label: string; value: string | number; w
   );
 }
 
+function formatSchedulerLabel(
+  scheduler?: { requestedEngine: "greedy" | "solver"; engineUsed: "greedy" | "solver" }
+): string {
+  if (!scheduler) return "Greedy";
+  const used = scheduler.engineUsed === "solver" ? "Solver" : "Greedy";
+  if (scheduler.requestedEngine === scheduler.engineUsed) return used;
+  const requested = scheduler.requestedEngine === "solver" ? "Solver" : "Greedy";
+  return `${requested} -> ${used}`;
+}
+
 export default function SchedulePage() {
   const { leagueId } = useParams<{ leagueId: string }>();
   const { canManage } = useLeagueRole();
@@ -123,6 +133,10 @@ export default function SchedulePage() {
       minWeeksNeeded: number;
       availableWeeks: number;
       matchupFrequency: number;
+    };
+    scheduler?: {
+      requestedEngine: "greedy" | "solver";
+      engineUsed: "greedy" | "solver";
     };
     generatedAt: string;
   };
@@ -295,6 +309,7 @@ export default function SchedulePage() {
         byes: data.byes ?? [],
         droppedPairs: data.droppedPairs ?? [],
         preflight: data.preflight,
+        scheduler: data.scheduler,
         generatedAt: new Date().toISOString(),
       });
       await refetchLeague();
@@ -775,6 +790,11 @@ export default function SchedulePage() {
                     label="Dropped pairs"
                     value={gs.droppedPairs.length}
                     warn={gs.droppedPairs.length > 0}
+                  />
+                  <Stat
+                    label="Scheduler"
+                    value={formatSchedulerLabel(gs.scheduler)}
+                    warn={gs.scheduler?.requestedEngine !== gs.scheduler?.engineUsed}
                   />
                 </div>
                 <p className="text-xs text-emerald-900/70">
