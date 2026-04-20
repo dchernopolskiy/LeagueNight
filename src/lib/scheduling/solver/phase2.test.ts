@@ -72,6 +72,51 @@ describe("Phase 2: slot/court ILP", () => {
     expect(xBuckets[1] - xBuckets[0]).toBe(1);
   }, 15_000);
 
+  it("honors a team's early time preference when capacity allows", async () => {
+    // 2 games across 4 buckets × 1 court. Team A prefers early; it should
+    // land in bucket 0 or 1 (the early half), not 2 or 3.
+    const games: Phase2Game[] = [
+      { id: "g1", pairKey: "A|B", teamA: "A", teamB: "B" },
+      { id: "g2", pairKey: "C|D", teamA: "C", teamB: "D" },
+    ];
+    const result = await solvePhase2({
+      games,
+      buckets: 4,
+      courtsPerBucket: 1,
+      teamPreferences: [
+        { teamId: "A", prefer: "early", source: "preferred_time" },
+      ],
+    });
+    expect(result.status).toBe("Optimal");
+    const aSlot = result.slots.find((s) => s.gameId === "g1")!;
+    expect(aSlot.bucket).toBeLessThan(2);
+    expect(aSlot.preferenceHits).toEqual([
+      { teamId: "A", source: "preferred_time" },
+    ]);
+  }, 15_000);
+
+  it("prefers week_specific_time over preferred_time when both are set", async () => {
+    // Team A has preferred_time=early but week_specific=late. Expect late.
+    const games: Phase2Game[] = [
+      { id: "g1", pairKey: "A|B", teamA: "A", teamB: "B" },
+      { id: "g2", pairKey: "C|D", teamA: "C", teamB: "D" },
+    ];
+    const result = await solvePhase2({
+      games,
+      buckets: 4,
+      courtsPerBucket: 1,
+      teamPreferences: [
+        { teamId: "A", prefer: "late", source: "week_specific_time" },
+      ],
+    });
+    expect(result.status).toBe("Optimal");
+    const aSlot = result.slots.find((s) => s.gameId === "g1")!;
+    expect(aSlot.bucket).toBeGreaterThanOrEqual(2);
+    expect(aSlot.preferenceHits).toEqual([
+      { teamId: "A", source: "week_specific_time" },
+    ]);
+  }, 15_000);
+
   it("LP builder emits valid CPLEX LP with binary section", () => {
     const { lp } = buildPhase2LP({
       games: [{ id: "g1", pairKey: "A|B", teamA: "A", teamB: "B" }],

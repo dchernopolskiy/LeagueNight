@@ -12,7 +12,12 @@ import {
   solvePhase1,
   type Phase1Assignment,
 } from "./solver/phase1";
-import { solvePhase2, type Phase2Game } from "./solver/phase2";
+import {
+  solvePhase2,
+  type Phase2Game,
+  type Phase2TeamPreference,
+} from "./solver/phase2";
+import type { PreferenceApplied } from "@/lib/types";
 
 /**
  * Two-phase ILP scheduler. Phase 1 assigns pairs to weeks (HiGHS MIP),
@@ -75,6 +80,8 @@ export async function solveSchedule(params: FillParams): Promise<WeekFillResult>
     pairTeams.set(p.key, { teamA: p.teamA, teamB: p.teamB });
   }
 
+  const teamsById = new Map(teams.map((t) => [t.id, t]));
+
   const [sh, sm] = pattern.startTime.split(":").map(Number);
   let phase2ObjectiveTotal = 0;
   let phase2WeeksSolved = 0;
@@ -94,10 +101,13 @@ export async function solveSchedule(params: FillParams): Promise<WeekFillResult>
       };
     });
 
+    const teamPreferences = buildWeekPreferences(teamsById, phase2Games, weekNumber);
+
     const phase2 = await solvePhase2({
       games: phase2Games,
       buckets: slotsPerDay,
       courtsPerBucket: pattern.courtCount,
+      teamPreferences,
     });
     if (phase2.status !== "Optimal") {
       throw new Error(
@@ -116,6 +126,14 @@ export async function solveSchedule(params: FillParams): Promise<WeekFillResult>
       scheduledAt.setMinutes(
         scheduledAt.getMinutes() + slot.bucket * pattern.durationMinutes
       );
+      const applied: PreferenceApplied = {};
+      for (const hit of slot.preferenceHits) {
+        const side: "home_team" | "away_team" =
+          hit.teamId === g.teamA ? "home_team" : "away_team";
+        const existing = applied[side] || [];
+        if (!existing.includes(hit.source)) existing.push(hit.source);
+        applied[side] = existing;
+      }
       games.push({
         home: g.teamA,
         away: g.teamB,
@@ -123,7 +141,8 @@ export async function solveSchedule(params: FillParams): Promise<WeekFillResult>
         venue: pattern.venue,
         court: pattern.courtCount > 1 ? `Court ${slot.court}` : null,
         weekNumber,
-        preferenceApplied: null,
+        preferenceApplied:
+          Object.keys(applied).length > 0 ? applied : null,
         schedulingNotes: null,
       });
     }
@@ -157,6 +176,40 @@ export async function solveSchedule(params: FillParams): Promise<WeekFillResult>
     targetWeeks,
     availableWeeks,
   };
+}
+
+// Builds per-week preference entries for the teams playing this week.
+// `week_preferences[weekNumber]` dominates `preferred_time` — only the stronger
+// signal is forwarded to Phase 2 (matching greedy's exclusive-choice behavior).
+function buildWeekPreferences(
+  teamsById: Map<string, WeekFillTeam>,
+  games: Phase2Game[],
+  weekNumber: number
+): Phase2TeamPreference[] {
+  const result: Phase2TeamPreference[] = [];
+  const seen = new Set<string>();
+  for (const g of games) {
+    for (const teamId of [g.teamA, g.teamB]) {
+      if (seen.has(teamId)) continue;
+      seen.add(teamId);
+      const t = teamsById.get(teamId);
+      const pref = t?.preferences;
+      if (!pref) continue;
+      const weekPref = pref.week_preferences?.[String(weekNumber)];
+      if (weekPref === "early" || weekPref === "late") {
+        result.push({ teamId, prefer: weekPref, source: "week_specific_time" });
+        continue;
+      }
+      if (pref.preferred_time === "early" || pref.preferred_time === "late") {
+        result.push({
+          teamId,
+          prefer: pref.preferred_time,
+          source: "preferred_time",
+        });
+      }
+    }
+  }
+  return result;
 }
 
 // ── Local helpers (duplicated from week-fill.ts to avoid export churn) ──────

@@ -3,13 +3,25 @@
 //
 // Given Phase 1's pair→week decisions, Phase 2 places each game on a specific
 // time bucket and court within that week. The model minimizes non-adjacency
-// for teams playing multiple games on the same night (so two games land in
-// neighboring buckets instead of with 45-min gaps between).
+// for teams playing multiple games on the same night and honors each team's
+// early/late bucket preference (via `preferred_time` or a week-specific
+// override in `week_preferences`).
 //
 // Multi-venue assignment is NOT handled here — it's orthogonal and already
 // done by location-assignment.ts as a post-pass. Phase 2 assumes a single
 // venue per week.
 // ─────────────────────────────────────────────────────────────────────────────
+
+export type BucketHalfPreference = "early" | "late";
+
+export interface Phase2TeamPreference {
+  teamId: string;
+  // "early" rewards buckets in the first half of the night; "late" rewards
+  // the second half. `source` identifies which team-level preference was hit
+  // (propagated to PreferenceApplied so the UI can show what was honored).
+  prefer: BucketHalfPreference;
+  source: "preferred_time" | "week_specific_time";
+}
 
 export interface Phase2Game {
   id: string; // unique within the week
@@ -22,12 +34,17 @@ export interface Phase2Input {
   games: Phase2Game[];
   buckets: number; // number of time buckets that night
   courtsPerBucket: number;
+  teamPreferences?: Phase2TeamPreference[];
 }
 
 export interface Phase2Slot {
   gameId: string;
   bucket: number; // 0-indexed
   court: number; // 1-indexed
+  preferenceHits: Array<{
+    teamId: string;
+    source: "preferred_time" | "week_specific_time";
+  }>;
 }
 
 export interface Phase2Result {
@@ -57,6 +74,15 @@ async function loadHighs(): Promise<HighsModule> {
 const PENALTY_GAP = 100;
 const PENALTY_LATER_BUCKET = 1;
 const PENALTY_SKIP = 10_000; // never leave a game unplaced; acts as hard
+// Time-preference weights mirror greedy's scorePair:
+//  - week_preferences hit:   +15 / miss -10
+//  - preferred_time hit:     +8  / miss -3
+// In the LP we fold these into a single penalty per team-per-bucket that
+// carries the miss cost (buckets on the wrong half) plus the forfeited hit
+// bonus relative to being on the preferred half. Using positive penalties
+// (not negative bonuses) keeps the objective well-conditioned.
+const PENALTY_WEEK_PREF_MISS = 25; // hit+miss delta: 15 - (-10) = 25
+const PENALTY_PREF_TIME_MISS = 11; // hit+miss delta: 8  - (-3) = 11
 
 function sanitize(s: string): string {
   return s.replace(/[^a-zA-Z0-9]/g, "_");
@@ -123,6 +149,44 @@ export function buildPhase2LP(input: Phase2Input): {
       }
     }
     constraints.push(`${terms.join(" + ")} = 1`);
+  }
+
+  // Team time preferences: penalize each y[g,b,c] for every game that
+  // includes a team whose preference doesn't match bucket b's half.
+  //
+  // The night splits at midBucket = ceil(buckets/2). Buckets < midBucket are
+  // "early"; buckets ≥ midBucket are "late". Single-bucket nights have no
+  // meaningful early/late split so we skip the objective term entirely.
+  const preferencesByTeam = new Map<string, Phase2TeamPreference>();
+  for (const p of input.teamPreferences || []) {
+    // If a team appears twice (shouldn't under current data model), prefer
+    // week_specific_time since it's the stronger signal.
+    const existing = preferencesByTeam.get(p.teamId);
+    if (!existing || (existing.source === "preferred_time" && p.source === "week_specific_time")) {
+      preferencesByTeam.set(p.teamId, p);
+    }
+  }
+  if (buckets > 1 && preferencesByTeam.size > 0) {
+    const midBucket = Math.ceil(buckets / 2);
+    for (const g of games) {
+      for (const teamId of [g.teamA, g.teamB]) {
+        const pref = preferencesByTeam.get(teamId);
+        if (!pref) continue;
+        const penalty = pref.source === "week_specific_time"
+          ? PENALTY_WEEK_PREF_MISS
+          : PENALTY_PREF_TIME_MISS;
+        for (let b = 0; b < buckets; b++) {
+          const isEarly = b < midBucket;
+          const isLate = b >= midBucket;
+          const miss = (pref.prefer === "early" && !isEarly) ||
+            (pref.prefer === "late" && !isLate);
+          if (!miss) continue;
+          for (let c = 1; c <= courtsPerBucket; c++) {
+            objectiveTerms.push(`${penalty} ${yVar(g.id, b, c)}`);
+          }
+        }
+      }
+    }
   }
 
   // At most one game per (bucket, court).
@@ -222,14 +286,44 @@ export async function solvePhase2(input: Phase2Input): Promise<Phase2Result> {
     notes.push(`Phase 2 solver status: ${result.Status}`);
   }
 
+  const preferencesByTeam = new Map<string, Phase2TeamPreference>();
+  for (const p of input.teamPreferences || []) {
+    const existing = preferencesByTeam.get(p.teamId);
+    if (!existing || (existing.source === "preferred_time" && p.source === "week_specific_time")) {
+      preferencesByTeam.set(p.teamId, p);
+    }
+  }
+  const gameById = new Map(input.games.map((g) => [g.id, g]));
+  const midBucket = Math.ceil(input.buckets / 2);
+
   const slots: Phase2Slot[] = [];
   for (const [name, col] of Object.entries(result.Columns)) {
     if (!name.startsWith("y_")) continue;
     if (Math.round(col.Primal) !== 1) continue;
     const ref = meta.gameKeyByVar.get(name);
-    if (ref) {
-      slots.push({ gameId: ref.gameId, bucket: ref.bucket, court: ref.court });
+    if (!ref) continue;
+
+    const game = gameById.get(ref.gameId);
+    const preferenceHits: Phase2Slot["preferenceHits"] = [];
+    if (game && input.buckets > 1) {
+      const isEarly = ref.bucket < midBucket;
+      const isLate = ref.bucket >= midBucket;
+      for (const teamId of [game.teamA, game.teamB]) {
+        const pref = preferencesByTeam.get(teamId);
+        if (!pref) continue;
+        const hit = (pref.prefer === "early" && isEarly) ||
+          (pref.prefer === "late" && isLate);
+        if (hit) {
+          preferenceHits.push({ teamId, source: pref.source });
+        }
+      }
     }
+    slots.push({
+      gameId: ref.gameId,
+      bucket: ref.bucket,
+      court: ref.court,
+      preferenceHits,
+    });
   }
 
   return {
