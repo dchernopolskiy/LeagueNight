@@ -26,6 +26,13 @@ export interface LocationAssignedGame extends LocationAssignableGame {
   totalCourts: number;
 }
 
+export interface SameNightLocationSplit {
+  date: string;
+  teamId: string;
+  locationIds: string[];
+  locationNames: string[];
+}
+
 interface ComponentInfo {
   id: number;
   teamIds: Set<string>;
@@ -57,6 +64,43 @@ export function assignGamesToLocationCourtSlots(
   }
 
   return assigned;
+}
+
+export function findSameNightLocationSplits(
+  games: LocationAssignedGame[]
+): SameNightLocationSplit[] {
+  const locationsByTeamDate = new Map<
+    string,
+    { date: string; teamId: string; locations: Map<string, string> }
+  >();
+
+  for (const game of games) {
+    const date = formatYMD(game.scheduledAt);
+    for (const teamId of [game.home, game.away]) {
+      const key = `${date}:${teamId}`;
+      const entry =
+        locationsByTeamDate.get(key) ||
+        { date, teamId, locations: new Map<string, string>() };
+      entry.locations.set(game.locationId, game.locationName);
+      locationsByTeamDate.set(key, entry);
+    }
+  }
+
+  const splits: SameNightLocationSplit[] = [];
+  for (const entry of locationsByTeamDate.values()) {
+    if (entry.locations.size < 2) continue;
+    splits.push({
+      date: entry.date,
+      teamId: entry.teamId,
+      locationIds: [...entry.locations.keys()].sort(),
+      locationNames: [...entry.locations.values()].sort(),
+    });
+  }
+
+  return splits.sort((a, b) => {
+    if (a.date !== b.date) return a.date.localeCompare(b.date);
+    return a.teamId.localeCompare(b.teamId);
+  });
 }
 
 function assignDateGames(

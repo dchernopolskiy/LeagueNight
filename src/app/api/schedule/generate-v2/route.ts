@@ -4,7 +4,10 @@ import { fillScheduleByWeek, schedulePreflight } from "@/lib/scheduling/week-fil
 import { solveSchedule } from "@/lib/scheduling/solver";
 import { localToUTCISO, parseLocalDate } from "@/lib/scheduling/date-utils";
 import { computeReseedPools, type ReseedMode } from "@/lib/scheduling/reseed";
-import { assignGamesToLocationCourtSlots } from "@/lib/scheduling/location-assignment";
+import {
+  assignGamesToLocationCourtSlots,
+  findSameNightLocationSplits,
+} from "@/lib/scheduling/location-assignment";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
@@ -384,6 +387,10 @@ export async function POST(request: NextRequest) {
       teamDivisionIds
     );
     locationAssignmentDroppedCount = result.games.length - assignedGames.length;
+    const locationSplits = findSameNightLocationSplits(assignedGames);
+    if (locationSplits.length > 0) {
+      schedulerWarnings.push(formatLocationSplitWarning(locationSplits.length));
+    }
 
     for (const g of assignedGames) {
       gamesToInsert.push({
@@ -463,4 +470,8 @@ export async function POST(request: NextRequest) {
 function formatSchedulerError(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+function formatLocationSplitWarning(splitCount: number): string {
+  return `${splitCount} team-night${splitCount === 1 ? "" : "s"} had to be split across locations because no single venue had enough available courts.`;
 }

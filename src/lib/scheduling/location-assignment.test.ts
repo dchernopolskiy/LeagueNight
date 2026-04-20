@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assignGamesToLocationCourtSlots,
+  findSameNightLocationSplits,
   type LocationAssignableGame,
   type LocationCourtSlot,
 } from "./location-assignment";
@@ -62,5 +63,31 @@ describe("location assignment", () => {
     for (const locations of locationsByTeam.values()) {
       expect(locations.size).toBe(1);
     }
+    expect(findSameNightLocationSplits(assigned)).toEqual([]);
+  });
+
+  it("reports teams split across locations on the same night", () => {
+    const slots: LocationCourtSlot[] = [
+      { locationId: "reeves", courtNum: 1, locationName: "Reeves", totalCourts: 1 },
+      { locationId: "marshall", courtNum: 1, locationName: "Marshall", totalCourts: 1 },
+    ];
+    const games = [
+      game("sasa", "team-a", 0),
+      game("sasa", "team-b", 45),
+    ];
+
+    const assigned = [
+      { ...games[0], ...slots[0] },
+      { ...games[1], ...slots[1] },
+    ];
+
+    expect(findSameNightLocationSplits(assigned)).toEqual([
+      {
+        date: "2026-01-05",
+        teamId: "sasa",
+        locationIds: ["marshall", "reeves"],
+        locationNames: ["Marshall", "Reeves"],
+      },
+    ]);
   });
 });

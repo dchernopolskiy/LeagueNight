@@ -2,7 +2,10 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getProfile } from "@/lib/supabase/helpers";
 import { generateRoundRobin, assignDatesWithPreferences } from "@/lib/scheduling/round-robin";
 import { localToUTCISO } from "@/lib/scheduling/date-utils";
-import { assignGamesToLocationCourtSlots } from "@/lib/scheduling/location-assignment";
+import {
+  assignGamesToLocationCourtSlots,
+  findSameNightLocationSplits,
+} from "@/lib/scheduling/location-assignment";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
@@ -413,6 +416,12 @@ export async function POST(request: NextRequest) {
     if (droppedByLocationAssignment > 0) {
       schedulingWarnings.push(
         `${droppedByLocationAssignment} game${droppedByLocationAssignment === 1 ? "" : "s"} could not be assigned to an available court without overbooking.`
+      );
+    }
+    const locationSplits = findSameNightLocationSplits(assignedGames);
+    if (locationSplits.length > 0) {
+      schedulingWarnings.push(
+        `${locationSplits.length} team-night${locationSplits.length === 1 ? "" : "s"} had to be split across locations because no single venue had enough available courts.`
       );
     }
 
