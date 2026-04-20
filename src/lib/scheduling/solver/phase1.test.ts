@@ -190,4 +190,51 @@ describe("Phase 1: matchup-to-week ILP", () => {
     expect(lp).toContain("End");
     expect(lp).toContain("Binary");
   });
+
+  it("carries prior matchup counts and skill weights into the model", async () => {
+    const teams = [
+      { id: "a", name: "A", division_id: "d1" },
+      { id: "b", name: "B", division_id: "d1" },
+      { id: "c", name: "C", division_id: "d1" },
+      { id: "d", name: "D", division_id: "d1" },
+    ];
+    const pattern = {
+      dayOfWeek: 1,
+      startTime: "18:00",
+      endTime: "22:00",
+      venue: null,
+      courtCount: 2,
+      startsOn: new Date("2026-01-05"),
+      endsOn: new Date("2026-01-19"),
+      durationMinutes: 60,
+      skipDates: [],
+    };
+    const opts = {
+      matchupFrequency: 1,
+      gamesPerSession: 1,
+      allowCrossPlay: false,
+      gamesPerTeam: 2,
+    };
+    const input = buildPhase1InputFromWeekFill(teams, pattern, opts, 3, 2, {
+      existingMatchupCounts: new Map([["a|b", 1]]),
+      teamWeights: new Map([
+        ["a", 0.90],
+        ["b", 0.85],
+        ["c", 0.20],
+        ["d", 0.10],
+      ]),
+    });
+
+    const priorPair = input.pairs.find((p) => p.key === "a|b");
+    expect(priorPair?.priorPlayed).toBe(1);
+    expect(priorPair?.required).toBe(0);
+    expect(priorPair?.skillAlignment).toBeCloseTo(0.95);
+
+    const { lp } = buildPhase1LP(input);
+    expect(lp).toContain("50 x_a_b_w1");
+    expect(lp).toContain("-25.650 x_a_b_w1");
+
+    const result = await solvePhase1(input);
+    expect(result.status).toBe("Optimal");
+  }, 15_000);
 });

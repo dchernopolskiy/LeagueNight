@@ -276,8 +276,8 @@ export async function POST(request: NextRequest) {
 
   // Run the fill. `engine=solver` routes through the ILP path (Phase 1 + 2
   // via HiGHS); default `greedy` is the legacy pass. Solver ignores reseed
-  // team weights and existingMatchupCounts for now — those are Phase 1
-  // extensions still to be wired.
+  // existingMatchupCounts and reseed team weights are passed into Phase 1 so
+  // regeneration avoids already-played matchups and keeps skill-aligned pools.
   const fillParams = {
     teams: weekFillTeams,
     pattern: patternObj,

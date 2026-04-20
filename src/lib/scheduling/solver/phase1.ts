@@ -25,6 +25,8 @@ export interface Phase1Pair {
   teamB: string;
   crossDiv: boolean;
   required: number; // matchupFrequency for within-div; 0 for crossplay
+  priorPlayed: number;
+  skillAlignment?: number; // 0..1, only present in re-seed mode
 }
 
 export interface Phase1Input {
@@ -90,6 +92,8 @@ const PENALTY_OVER_GAMES = 100;
 const PENALTY_BACK_TO_BACK_BYE = 500;
 const PENALTY_CROSSPLAY_USE = 20;
 const PENALTY_CROSSPLAY_REPEAT = 80;
+const PENALTY_PRIOR_MATCHUP = 50;
+const BONUS_SKILL_ALIGNMENT = 27;
 // Dropping a required within-div pair is heavier than any other soft penalty
 // so the model only drops pairs when the calendar is genuinely insufficient.
 const PENALTY_DROP_REQUIRED_PAIR = 5_000;
@@ -144,6 +148,12 @@ export function buildPhase1LP(input: Phase1Input): {
       // Objective contributions.
       if (p.crossDiv) {
         objectiveTerms.push(`${PENALTY_CROSSPLAY_USE} ${v}`);
+      }
+      if (p.priorPlayed > 0) {
+        objectiveTerms.push(`${PENALTY_PRIOR_MATCHUP * p.priorPlayed} ${v}`);
+      }
+      if (p.skillAlignment !== undefined) {
+        objectiveTerms.push(`${(-BONUS_SKILL_ALIGNMENT * p.skillAlignment).toFixed(3)} ${v}`);
       }
     }
   }
@@ -345,10 +355,28 @@ export function buildPhase1InputFromWeekFill(
   pattern: WeekFillPattern,
   opts: WeekFillOptions,
   weeks: number,
-  slotsPerWeek: number
+  slotsPerWeek: number,
+  extras: {
+    existingMatchupCounts?: Map<string, number>;
+    teamWeights?: Map<string, number>;
+  } = {}
 ): Phase1Input {
   const pairs: Phase1Pair[] = [];
   const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+  const pairMeta = (a: string, b: string, required: number) => {
+    const key = pairKey(a, b);
+    const priorPlayed = extras.existingMatchupCounts?.get(key) ?? 0;
+    const wA = extras.teamWeights?.get(a);
+    const wB = extras.teamWeights?.get(b);
+    const skillAlignment =
+      wA !== undefined && wB !== undefined ? 1 - Math.abs(wA - wB) : undefined;
+    return {
+      key,
+      priorPlayed,
+      required: Math.max(0, required - priorPlayed),
+      skillAlignment,
+    };
+  };
 
   const byDivision = new Map<string, WeekFillTeam[]>();
   for (const t of teams) {
@@ -362,12 +390,19 @@ export function buildPhase1InputFromWeekFill(
   for (const divTeams of byDivision.values()) {
     for (let i = 0; i < divTeams.length; i++) {
       for (let j = i + 1; j < divTeams.length; j++) {
+        const meta = pairMeta(
+          divTeams[i].id,
+          divTeams[j].id,
+          opts.matchupFrequency
+        );
         pairs.push({
-          key: pairKey(divTeams[i].id, divTeams[j].id),
+          key: meta.key,
           teamA: divTeams[i].id < divTeams[j].id ? divTeams[i].id : divTeams[j].id,
           teamB: divTeams[i].id < divTeams[j].id ? divTeams[j].id : divTeams[i].id,
           crossDiv: false,
-          required: opts.matchupFrequency,
+          required: meta.required,
+          priorPlayed: meta.priorPlayed,
+          skillAlignment: meta.skillAlignment,
         });
       }
     }
@@ -396,15 +431,17 @@ export function buildPhase1InputFromWeekFill(
         const teamsB = byDivision.get(dB) || [];
         for (const tA of teamsA) {
           for (const tB of teamsB) {
-            const k = pairKey(tA.id, tB.id);
+            const meta = pairMeta(tA.id, tB.id, 0);
             // Skip if this pair is already a within-div pair (can't happen
             // since crossdiv pairs span buckets, but guard anyway).
             pairs.push({
-              key: k,
+              key: meta.key,
               teamA: tA.id < tB.id ? tA.id : tB.id,
               teamB: tA.id < tB.id ? tB.id : tA.id,
               crossDiv: true,
               required: 0,
+              priorPlayed: meta.priorPlayed,
+              skillAlignment: meta.skillAlignment,
             });
           }
         }

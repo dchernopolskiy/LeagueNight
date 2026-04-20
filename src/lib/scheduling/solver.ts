@@ -34,7 +34,12 @@ export async function solveSchedule(params: FillParams): Promise<WeekFillResult>
     ? targetWeeks
     : preflight.availableWeeks;
 
-  const gameDays = buildGameDaysLocal(pattern).slice(0, targetWeeks);
+  const allGameDays = buildGameDaysLocal(pattern);
+  const regenerateFromDate = params.regenerateFromDate;
+  const gameDays = (regenerateFromDate
+    ? allGameDays.filter((d) => d >= regenerateFromDate)
+    : allGameDays
+  ).slice(0, targetWeeks);
   const slotsPerDay = timeSlotsPerDayLocal(pattern);
   const slotsPerWeek = slotsPerDay * pattern.courtCount;
 
@@ -44,7 +49,11 @@ export async function solveSchedule(params: FillParams): Promise<WeekFillResult>
     pattern,
     opts,
     targetWeeks,
-    slotsPerWeek
+    slotsPerWeek,
+    {
+      existingMatchupCounts: params.existingMatchupCounts,
+      teamWeights: params.teamWeights,
+    }
   );
   const phase1 = await solvePhase1(phase1Input);
   if (phase1.status !== "Optimal") {
