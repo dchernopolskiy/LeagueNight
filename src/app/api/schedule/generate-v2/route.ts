@@ -1,6 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getProfile } from "@/lib/supabase/helpers";
 import { fillScheduleByWeek, schedulePreflight } from "@/lib/scheduling/week-fill";
+import { solveSchedule } from "@/lib/scheduling/solver";
 import { localToUTCISO, parseLocalDate } from "@/lib/scheduling/date-utils";
 import { computeReseedPools, type ReseedMode } from "@/lib/scheduling/reseed";
 import { assignGamesToLocationCourtSlots } from "@/lib/scheduling/location-assignment";
@@ -25,6 +26,7 @@ export async function POST(request: NextRequest) {
     locationIds = [],
     acceptTruncation = false,
     reseedMode,
+    engine = "greedy",
   }: {
     leagueId: string;
     patternId: string;
@@ -37,6 +39,7 @@ export async function POST(request: NextRequest) {
     locationIds?: string[];
     acceptTruncation?: boolean;
     reseedMode?: ReseedMode;
+    engine?: "greedy" | "solver";
   } = body;
 
   const supabase = createAdminClient();
@@ -271,8 +274,11 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Run the fill
-  const result = fillScheduleByWeek({
+  // Run the fill. `engine=solver` routes through the ILP path (Phase 1 + 2
+  // via HiGHS); default `greedy` is the legacy pass. Solver ignores reseed
+  // team weights and existingMatchupCounts for now — those are Phase 1
+  // extensions still to be wired.
+  const fillParams = {
     teams: weekFillTeams,
     pattern: patternObj,
     opts: {
@@ -287,7 +293,10 @@ export async function POST(request: NextRequest) {
     regenerateFromDate,
     existingMatchupCounts,
     teamWeights: reseedTeamWeights || undefined,
-  });
+  };
+  const result = engine === "solver"
+    ? await solveSchedule(fillParams)
+    : fillScheduleByWeek(fillParams);
 
   // Persist scheduling settings back to the pattern
   const patternUpdate: Record<string, unknown> = {
