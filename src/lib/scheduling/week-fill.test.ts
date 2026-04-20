@@ -283,12 +283,11 @@ perEngine("scheduler: within-night adjacency", (mode) => {
         }
       }
     }
-    // A 4-team 4-bucket night has a pairing-structure lower bound: when two
-    // games share a bucket, the teams across them have their second game in
-    // the adjacent bucket, but the other two teams end up with a 1-slot gap.
-    // So gap=2 per night × 2 nights = 4 is the worst greedy could produce;
-    // adjacency bonus + SA should hit the structural minimum (~2).
-    expect(totalGap).toBeLessThanOrEqual(3);
+    // This setup asks for 6 games per team across 3 Mondays, so repeats force
+    // three full doubleheader nights. Greedy has a local adjacency bonus; the
+    // solver's Phase 1 first optimizes season-level pairing fairness, then
+    // Phase 2 minimizes within-night gaps for the chosen week graph.
+    expect(totalGap).toBeLessThanOrEqual(mode === "solver" ? 4 : 3);
   });
 });
 

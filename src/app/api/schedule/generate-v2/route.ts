@@ -294,9 +294,23 @@ export async function POST(request: NextRequest) {
     existingMatchupCounts,
     teamWeights: reseedTeamWeights || undefined,
   };
-  const result = engine === "solver"
-    ? await solveSchedule(fillParams)
-    : fillScheduleByWeek(fillParams);
+  const requestedEngine: "greedy" | "solver" = engine === "solver" ? "solver" : "greedy";
+  let engineUsed: "greedy" | "solver" = requestedEngine;
+  const schedulerWarnings: string[] = [];
+  let result;
+  if (requestedEngine === "solver") {
+    try {
+      result = await solveSchedule(fillParams);
+    } catch (err) {
+      engineUsed = "greedy";
+      schedulerWarnings.push(
+        `Solver failed before persistence (${formatSchedulerError(err)}); used greedy scheduler instead.`
+      );
+      result = fillScheduleByWeek(fillParams);
+    }
+  } else {
+    result = fillScheduleByWeek(fillParams);
+  }
 
   // Persist scheduling settings back to the pattern
   const patternUpdate: Record<string, unknown> = {
@@ -413,7 +427,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  const warnings: string[] = [...result.notes];
+  const warnings: string[] = [...schedulerWarnings, ...result.notes];
   if (result.droppedPairs.length > 0) {
     warnings.push(
       `${result.droppedPairs.length} pairing${result.droppedPairs.length > 1 ? "s" : ""} could not be scheduled within the available weeks.`
@@ -439,5 +453,14 @@ export async function POST(request: NextRequest) {
     byes: result.byes,
     droppedPairs: result.droppedPairs,
     targetWeeks: result.targetWeeks,
+    scheduler: {
+      requestedEngine,
+      engineUsed,
+    },
   });
+}
+
+function formatSchedulerError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
 }

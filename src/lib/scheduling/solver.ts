@@ -67,6 +67,8 @@ export async function solveSchedule(params: FillParams): Promise<WeekFillResult>
   }
 
   const [sh, sm] = pattern.startTime.split(":").map(Number);
+  let phase2ObjectiveTotal = 0;
+  let phase2WeeksSolved = 0;
   for (let weekIdx = 0; weekIdx < gameDays.length; weekIdx++) {
     const weekNumber = weekIdx + 1;
     const dayDate = gameDays[weekIdx];
@@ -93,6 +95,8 @@ export async function solveSchedule(params: FillParams): Promise<WeekFillResult>
         `Phase 2 solver returned status=${phase2.status} for week ${weekNumber}`
       );
     }
+    phase2ObjectiveTotal += phase2.objective;
+    phase2WeeksSolved++;
 
     // Emit games at their solved (bucket, court).
     for (const slot of phase2.slots) {
@@ -122,6 +126,12 @@ export async function solveSchedule(params: FillParams): Promise<WeekFillResult>
   const notes: string[] = [];
   if (phase1.notes.length > 0) notes.push(...phase1.notes);
   notes.push(`Solver: Phase 1 objective ${phase1.objective.toFixed(0)}`);
+  notes.push(
+    `Solver: Phase 2 objective ${phase2ObjectiveTotal.toFixed(0)} across ${phase2WeeksSolved} week${phase2WeeksSolved === 1 ? "" : "s"}`
+  );
+  notes.push(
+    `Solver: scheduled ${games.length} game${games.length === 1 ? "" : "s"} across ${targetWeeks} target week${targetWeeks === 1 ? "" : "s"}`
+  );
 
   return {
     games,
@@ -208,4 +218,3 @@ function computeByes(
   }
   return byes;
 }
-
