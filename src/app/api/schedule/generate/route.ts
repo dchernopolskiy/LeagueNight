@@ -27,6 +27,17 @@ export async function POST(request: NextRequest) {
     locationIds = [],
   } = body;
 
+  const validationError = validateGenerateRequest({
+    leagueId,
+    patternId,
+    gamesPerTeam,
+    gamesPerSession,
+    matchupFrequency,
+  });
+  if (validationError) {
+    return NextResponse.json({ error: validationError }, { status: 400 });
+  }
+
   const supabase = createAdminClient();
   const pairKey = (teamA: string, teamB: string) =>
     [teamA, teamB].sort().join("-");
@@ -475,4 +486,33 @@ export async function POST(request: NextRequest) {
     totalMatchups: allMatchups.length,
     scheduledGames: gamesToInsert.length,
   });
+}
+
+function validateGenerateRequest(input: {
+  leagueId: unknown;
+  patternId: unknown;
+  gamesPerTeam: unknown;
+  gamesPerSession: unknown;
+  matchupFrequency: unknown;
+}): string | null {
+  if (typeof input.leagueId !== "string" || input.leagueId.length === 0) {
+    return "leagueId is required";
+  }
+  if (typeof input.patternId !== "string" || input.patternId.length === 0) {
+    return "patternId is required";
+  }
+  if (!isPositiveInteger(input.gamesPerTeam)) {
+    return "gamesPerTeam must be a positive integer";
+  }
+  if (!isPositiveInteger(input.gamesPerSession)) {
+    return "gamesPerSession must be a positive integer";
+  }
+  if (!isPositiveInteger(input.matchupFrequency)) {
+    return "matchupFrequency must be a positive integer";
+  }
+  return null;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
