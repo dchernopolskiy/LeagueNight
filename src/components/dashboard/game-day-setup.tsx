@@ -38,6 +38,7 @@ import type { GameDayPattern, Location, LocationUnavailability } from "@/lib/typ
 
 const DAY_LABELS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 const DAY_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+type SchedulerEngine = "greedy" | "solver";
 const DURATION_OPTIONS = [30, 45, 60, 75, 90, 120];
 
 // ── Holiday helpers ──────────────────────────────────────────────────────────
@@ -115,6 +116,7 @@ interface Props {
       regenerateFrom?: string;
       locationIds: string[];
       reseedMode?: "by_skill" | "within_division";
+      engine?: SchedulerEngine;
     }
   ) => Promise<void>;
 }
@@ -158,6 +160,7 @@ export function GameDaySetupPanel({
   const [showForm, setShowForm] = useState(patterns.length === 0);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm());
+  const [schedulerEngine, setSchedulerEngine] = useState<SchedulerEngine>("greedy");
   const [saving, setSaving] = useState(false);
 
   // Inline "Add location" state
@@ -360,6 +363,7 @@ export function GameDaySetupPanel({
             mixDivisions: p.mix_divisions,
             skipDates: p.skip_dates,
             locationIds: p.location_ids,
+            engine: schedulerEngine,
           });
         }
       }
@@ -405,6 +409,7 @@ export function GameDaySetupPanel({
         skipDates: p.skip_dates,
         regenerateFrom: form.regenerateFrom || undefined,
         locationIds: p.location_ids,
+        engine: schedulerEngine,
       });
     }
   }
@@ -421,6 +426,7 @@ export function GameDaySetupPanel({
         skipDates: p.skip_dates,
         regenerateFrom: form.regenerateFrom || undefined,
         locationIds: p.location_ids,
+        engine: schedulerEngine,
       });
     }
   }
@@ -802,6 +808,18 @@ export function GameDaySetupPanel({
               <Zap className="h-3 w-3 mr-1" />
               {generating ? "Generating…" : "Generate"}
             </Button>
+            <Select
+              value={schedulerEngine}
+              onValueChange={(value) => setSchedulerEngine(value as SchedulerEngine)}
+            >
+              <SelectTrigger className="h-7 w-28 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="greedy">Greedy</SelectItem>
+                <SelectItem value="solver">Solver</SelectItem>
+              </SelectContent>
+            </Select>
             <button
               type="button"
               className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
@@ -835,6 +853,7 @@ export function GameDaySetupPanel({
                           regenerateFrom: regenFrom,
                           locationIds: p.location_ids,
                           reseedMode: useReseed ? "by_skill" : undefined,
+                          engine: schedulerEngine,
                         });
                       }
                       setRegenFrom("");
@@ -996,6 +1015,21 @@ export function GameDaySetupPanel({
               />
               <span className="text-xs text-muted-foreground">Allow cross-division matchups</span>
             </label>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Scheduler</Label>
+              <Select
+                value={schedulerEngine}
+                onValueChange={(value) => setSchedulerEngine(value as SchedulerEngine)}
+              >
+                <SelectTrigger className="h-8">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="greedy">Greedy</SelectItem>
+                  <SelectItem value="solver">Solver</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             {teamCount >= 2 && (
               <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">
                 With {teamCount} teams → each team plays ~<strong>{estimatedGames}</strong> game{estimatedGames !== 1 ? "s" : ""} per day pattern

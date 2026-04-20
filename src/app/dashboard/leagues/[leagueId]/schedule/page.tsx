@@ -235,6 +235,7 @@ export default function SchedulePage() {
       regenerateFrom?: string;
       locationIds: string[];
       reseedMode?: "by_skill" | "within_division";
+      engine?: "greedy" | "solver";
     },
     acceptTruncation = false
   ) {
@@ -255,6 +256,7 @@ export default function SchedulePage() {
         locationIds: opts.locationIds,
         acceptTruncation,
         reseedMode: opts.reseedMode,
+        engine: opts.engine,
       }),
     });
 
