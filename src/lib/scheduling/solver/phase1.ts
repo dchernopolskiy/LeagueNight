@@ -43,8 +43,16 @@ export interface Phase1Assignment {
   week: number;
 }
 
+export interface Phase1DroppedPair {
+  pairKey: string;
+  teamA: string;
+  teamB: string;
+  missed: number;
+}
+
 export interface Phase1Result {
   assignments: Phase1Assignment[];
+  droppedPairs: Phase1DroppedPair[];
   notes: string[];
   objective: number;
   status: string;
@@ -63,18 +71,16 @@ type HighsResult = {
   Columns: Record<string, { Primal: number; Name: string }>;
 };
 
-let highsPromise: Promise<HighsModule> | null = null;
+// HiGHS WASM holds solver state in the module instance; calling .solve()
+// multiple times on the same instance corrupts internal memory (observed:
+// "RuntimeError: memory access out of bounds" on the 3rd+ call). We pay a
+// small init cost per solve to guarantee a clean state — for our problem
+// sizes the wasm boot is dominated by the solve itself.
 async function loadHighs(): Promise<HighsModule> {
-  if (!highsPromise) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    highsPromise = (async () => {
-      const mod = await import("highs");
-      const loader = (mod as unknown as { default: () => Promise<HighsModule> })
-        .default;
-      return loader();
-    })();
-  }
-  return highsPromise;
+  const mod = await import("highs");
+  const loader = (mod as unknown as { default: () => Promise<HighsModule> })
+    .default;
+  return loader();
 }
 
 // ── LP construction ─────────────────────────────────────────────────────────
@@ -84,9 +90,12 @@ const PENALTY_OVER_GAMES = 100;
 const PENALTY_BACK_TO_BACK_BYE = 500;
 const PENALTY_CROSSPLAY_USE = 20;
 const PENALTY_CROSSPLAY_REPEAT = 80;
+// Dropping a required within-div pair is heavier than any other soft penalty
+// so the model only drops pairs when the calendar is genuinely insufficient.
+const PENALTY_DROP_REQUIRED_PAIR = 5_000;
 
 function xVar(pairKey: string, week: number): string {
-  return `x_${pairKey.replace(/\|/g, "_")}_w${week}`;
+  return `x_${sanitize(pairKey)}_w${week}`;
 }
 function playsVar(teamId: string, week: number): string {
   return `plays_${sanitize(teamId)}_w${week}`;
@@ -154,14 +163,22 @@ export function buildPhase1LP(input: Phase1Input): {
     objectiveTerms.push(`${PENALTY_CROSSPLAY_REPEAT} ${repeatVar}`);
   }
 
-  // Hard constraint: required within-div pair frequency.
+  // Required within-div pair frequency — soft lower bound. The model must
+  // schedule each pair at least `required` times unless the calendar can't
+  // fit it (slack = drop). Repeats beyond `required` are allowed so the
+  // games-per-team goal can drive extras. Pays PENALTY_DROP_REQUIRED_PAIR
+  // per missed play (heavier than every other soft term).
   for (const p of pairs) {
     if (p.crossDiv) continue;
     if (p.required <= 0) continue;
     const lhs = Array.from({ length: weeks }, (_, i) =>
       xVar(p.key, i + 1)
     ).join(" + ");
-    constraints.push(`${lhs} = ${p.required}`);
+    const dropVar = `drop_${sanitize(p.key)}`;
+    generals.push(dropVar);
+    // Σ x[p,w] + drop[p] >= required. drop ≥ 0 counts missed plays.
+    constraints.push(`${lhs} + ${dropVar} >= ${p.required}`);
+    objectiveTerms.push(`${PENALTY_DROP_REQUIRED_PAIR} ${dropVar}`);
   }
 
   // Per-team per-week cap: games played ≤ gamesPerSession.
@@ -283,18 +300,38 @@ export async function solvePhase1(input: Phase1Input): Promise<Phase1Result> {
   }
 
   const assignments: Phase1Assignment[] = [];
+  const droppedPairs: Phase1DroppedPair[] = [];
+  const pairByKey = new Map(input.pairs.map((p) => [p.key, p]));
   for (const [name, col] of Object.entries(result.Columns)) {
-    if (!name.startsWith("x_")) continue;
-    if (Math.round(col.Primal) !== 1) continue;
-    const pairKey = meta.pairKeyByVar.get(name);
-    const week = meta.weekByVar.get(name);
-    if (pairKey && week !== undefined) {
-      assignments.push({ pairKey, week });
+    if (name.startsWith("x_")) {
+      if (Math.round(col.Primal) !== 1) continue;
+      const pairKey = meta.pairKeyByVar.get(name);
+      const week = meta.weekByVar.get(name);
+      if (pairKey && week !== undefined) {
+        assignments.push({ pairKey, week });
+      }
+    } else if (name.startsWith("drop_")) {
+      const missed = Math.round(col.Primal);
+      if (missed <= 0) continue;
+      // Recover pairKey from variable name. `drop_<sanitized>` — rather than
+      // reverse-sanitize, look up by matching sanitized form against known pairs.
+      for (const p of pairByKey.values()) {
+        if (name === `drop_${sanitize(p.key)}`) {
+          droppedPairs.push({
+            pairKey: p.key,
+            teamA: p.teamA,
+            teamB: p.teamB,
+            missed,
+          });
+          break;
+        }
+      }
     }
   }
 
   return {
     assignments,
+    droppedPairs,
     notes,
     objective: result.ObjectiveValue,
     status: result.Status,

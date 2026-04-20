@@ -46,17 +46,12 @@ type HighsResult = {
   Columns: Record<string, { Primal: number; Name: string }>;
 };
 
-let highsPromise: Promise<HighsModule> | null = null;
+// New HiGHS instance per solve — see phase1.ts for rationale.
 async function loadHighs(): Promise<HighsModule> {
-  if (!highsPromise) {
-    highsPromise = (async () => {
-      const mod = await import("highs");
-      const loader = (mod as unknown as { default: () => Promise<HighsModule> })
-        .default;
-      return loader();
-    })();
-  }
-  return highsPromise;
+  const mod = await import("highs");
+  const loader = (mod as unknown as { default: () => Promise<HighsModule> })
+    .default;
+  return loader();
 }
 
 const PENALTY_GAP = 100;
@@ -151,36 +146,39 @@ export function buildPhase2LP(input: Phase2Input): {
       constraints.push(`${terms.join(" + ")} <= 1`);
 
       // playsBucket[t,b] = Σ of team's y's in bucket b. Since capacity is 1,
-      // plays is just equal to the sum (binary-valued).
+      // plays is just equal to the sum (binary-valued). Negate each term
+      // explicitly — CPLEX LP format requires a sign in front of every term.
       const pv = playsBucketVar(team, b);
       binaries.push(pv);
-      constraints.push(`${pv} - ${terms.join(" - ")} = 0`);
+      const negated = terms.map((v) => `- ${v}`).join(" ");
+      constraints.push(`${pv} ${negated} = 0`);
     }
   }
 
-  // Non-adjacency penalty: for each team, penalize any bucket b where the
-  // team plays in b but doesn't play in b+1, unless b is their last game.
-  // Simpler formulation: for each team with ≥2 games, count "gaps" — pairs
-  // of adjacent buckets where bucket b has a game but b+1 doesn't.
+  // Non-adjacency penalty: for each team, for each ordered pair of buckets
+  // (b1 < b2) with distance d = b2 - b1 > 1, create a binary indicator
+  // `pairPlay[t,b1,b2]` that equals 1 when the team has games in BOTH b1 and
+  // b2. Penalty weight scales with (d - 1) so two-bucket gaps hurt less than
+  // three-bucket gaps. This directly mirrors the fixture's gap accounting:
+  //   totalGap = Σ_teams Σ_{consecutive team games} (bucketDistance - 1)
   //
-  // gap[t,b] >= plays[t,b] - plays[t,b+1]     (if playing now but not next)
-  // gap[t,b] binary.
-  //
-  // This overcounts at the end of the night (final game always has no "next"
-  // play), but the lower bound is constant = number of games - 1 for each
-  // team, so it doesn't affect which placement wins.
+  // pairPlay[t,b1,b2] >= plays[t,b1] + plays[t,b2] - 1
   for (const team of gamesByTeam.keys()) {
     if ((gamesByTeam.get(team) || []).length < 2) continue;
-    for (let b = 0; b < buckets - 1; b++) {
-      const gv = gapVar(team, b);
-      binaries.push(gv);
-      // gap >= plays[t,b] - plays[t,b+1]  →  plays[t,b] - plays[t,b+1] - gap <= 0
-      constraints.push(
-        `${playsBucketVar(team, b)} - ${playsBucketVar(team, b + 1)} - ${gv} <= 0`
-      );
-      objectiveTerms.push(`${PENALTY_GAP} ${gv}`);
+    for (let b1 = 0; b1 < buckets; b1++) {
+      for (let b2 = b1 + 2; b2 < buckets; b2++) {
+        const weight = (b2 - b1 - 1) * PENALTY_GAP;
+        const gv = `gap_${sanitize(team)}_b${b1}_${b2}`;
+        binaries.push(gv);
+        // plays[t,b1] + plays[t,b2] - gap <= 1
+        constraints.push(
+          `${playsBucketVar(team, b1)} + ${playsBucketVar(team, b2)} - ${gv} <= 1`
+        );
+        objectiveTerms.push(`${weight} ${gv}`);
+      }
     }
   }
+  void gapVar;
 
   void PENALTY_SKIP; // reserved for soft-placement extension
 

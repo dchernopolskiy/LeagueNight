@@ -11,7 +11,7 @@ import { runScheduler, type SchedulerMode } from "./__fixtures__/run-scheduler";
 // Engines under test. Flip to ["greedy", "solver"] once the ILP models land;
 // the harness is already shape-compatible. Using `satisfies` so extending the
 // list surfaces any TS mismatch.
-const ENGINES: SchedulerMode[] = ["greedy"] satisfies SchedulerMode[];
+const ENGINES: SchedulerMode[] = ["greedy", "solver"] satisfies SchedulerMode[];
 
 function perEngine(
   name: string,
