@@ -19,7 +19,7 @@ import type {
 // bug, not a real-world case.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export interface Phase1Pair {
+export interface MatchupSelectionPair {
   key: string; // deterministic id, e.g. "t1|t2"
   teamA: string;
   teamB: string;
@@ -30,10 +30,10 @@ export interface Phase1Pair {
   dayPreferenceScore?: number;
 }
 
-export interface Phase1Input {
+export interface MatchupSelectionInput {
   teams: WeekFillTeam[];
   weeks: number;
-  pairs: Phase1Pair[];
+  pairs: MatchupSelectionPair[];
   opts: Pick<
     WeekFillOptions,
     "matchupFrequency" | "gamesPerSession" | "gamesPerTeam"
@@ -45,21 +45,21 @@ export interface Phase1Input {
   forbiddenWeeksByTeam?: Map<string, Set<number>>;
 }
 
-export interface Phase1Assignment {
+export interface MatchupSelectionAssignment {
   pairKey: string;
   week: number;
 }
 
-export interface Phase1DroppedPair {
+export interface MatchupSelectionDroppedPair {
   pairKey: string;
   teamA: string;
   teamB: string;
   missed: number;
 }
 
-export interface Phase1Result {
-  assignments: Phase1Assignment[];
-  droppedPairs: Phase1DroppedPair[];
+export interface MatchupSelectionResult {
+  assignments: MatchupSelectionAssignment[];
+  droppedPairs: MatchupSelectionDroppedPair[];
   notes: string[];
   objective: number;
   status: string;
@@ -129,7 +129,7 @@ function sanitize(s: string): string {
   return s.replace(/[^a-zA-Z0-9]/g, "_");
 }
 
-export function buildPhase1LP(input: Phase1Input): {
+export function buildMatchupSelectionLP(input: MatchupSelectionInput): {
   lp: string;
   binaries: string[];
   generals: string[];
@@ -371,18 +371,20 @@ export function buildPhase1LP(input: Phase1Input): {
   };
 }
 
-export async function solvePhase1(input: Phase1Input): Promise<Phase1Result> {
-  const { lp, meta } = buildPhase1LP(input);
+export async function solveMatchupSelection(
+  input: MatchupSelectionInput
+): Promise<MatchupSelectionResult> {
+  const { lp, meta } = buildMatchupSelectionLP(input);
   const highs = await loadHighs();
   const result = highs.solve(lp);
 
   const notes: string[] = [];
   if (result.Status !== "Optimal") {
-    notes.push(`Phase 1 solver status: ${result.Status}`);
+    notes.push(`Matchup selection solver status: ${result.Status}`);
   }
 
-  const assignments: Phase1Assignment[] = [];
-  const droppedPairs: Phase1DroppedPair[] = [];
+  const assignments: MatchupSelectionAssignment[] = [];
+  const droppedPairs: MatchupSelectionDroppedPair[] = [];
   const pairByKey = new Map(input.pairs.map((p) => [p.key, p]));
   for (const [name, col] of Object.entries(result.Columns)) {
     if (name.startsWith("x_")) {
@@ -422,7 +424,7 @@ export async function solvePhase1(input: Phase1Input): Promise<Phase1Result> {
 
 // ── Public entry from WeekFill inputs ───────────────────────────────────────
 
-export function buildPhase1InputFromWeekFill(
+export function buildMatchupSelectionInputFromWeekFill(
   teams: WeekFillTeam[],
   pattern: WeekFillPattern,
   opts: WeekFillOptions,
@@ -433,8 +435,8 @@ export function buildPhase1InputFromWeekFill(
     teamWeights?: Map<string, number>;
     forbiddenWeeksByTeam?: Map<string, Set<number>>;
   } = {}
-): Phase1Input {
-  const pairs: Phase1Pair[] = [];
+): MatchupSelectionInput {
+  const pairs: MatchupSelectionPair[] = [];
   const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
   const dayName = DAY_NAMES[pattern.dayOfWeek] || null;
   const pairMeta = (a: string, b: string, required: number) => {

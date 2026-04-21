@@ -1,16 +1,20 @@
 import { describe, it, expect } from "vitest";
-import { buildPhase2LP, solvePhase2, type Phase2Game } from "./slot-assignment";
+import {
+  buildSlotAssignmentLP,
+  solveSlotAssignment,
+  type SlotAssignmentGame,
+} from "./slot-assignment";
 
 describe("Phase 2: slot/court ILP", () => {
   it("places 2 games in 2 buckets × 1 court with adjacent scheduling", async () => {
     // Two games, 2 buckets, 1 court each. Only 2 assignments possible: any
     // permutation. No team plays twice, so adjacency doesn't matter. Both
     // solutions are optimal with objective 0.
-    const games: Phase2Game[] = [
+    const games: SlotAssignmentGame[] = [
       { id: "g1", pairKey: "A|B", teamA: "A", teamB: "B" },
       { id: "g2", pairKey: "C|D", teamA: "C", teamB: "D" },
     ];
-    const result = await solvePhase2({
+    const result = await solveSlotAssignment({
       games,
       buckets: 2,
       courtsPerBucket: 1,
@@ -28,11 +32,11 @@ describe("Phase 2: slot/court ILP", () => {
   });
 
   it("uses parallel courts before spilling games into later buckets", async () => {
-    const games: Phase2Game[] = [
+    const games: SlotAssignmentGame[] = [
       { id: "g1", pairKey: "A|B", teamA: "A", teamB: "B" },
       { id: "g2", pairKey: "C|D", teamA: "C", teamB: "D" },
     ];
-    const result = await solvePhase2({
+    const result = await solveSlotAssignment({
       games,
       buckets: 3,
       courtsPerBucket: 2,
@@ -46,12 +50,12 @@ describe("Phase 2: slot/court ILP", () => {
     // Team X plays 2 games. Given 3 buckets × 2 courts, the optimal placement
     // puts X's games in bucket 0 and bucket 1 (adjacent). A non-adjacent
     // placement (bucket 0 and bucket 2) would incur the gap penalty.
-    const games: Phase2Game[] = [
+    const games: SlotAssignmentGame[] = [
       { id: "g1", pairKey: "X|Y", teamA: "X", teamB: "Y" },
       { id: "g2", pairKey: "X|Z", teamA: "X", teamB: "Z" },
       { id: "g3", pairKey: "P|Q", teamA: "P", teamB: "Q" },
     ];
-    const result = await solvePhase2({
+    const result = await solveSlotAssignment({
       games,
       buckets: 3,
       courtsPerBucket: 2,
@@ -73,11 +77,11 @@ describe("Phase 2: slot/court ILP", () => {
   }, 15_000);
 
   it("keeps a team's games at one location when venue slots are provided", async () => {
-    const games: Phase2Game[] = [
+    const games: SlotAssignmentGame[] = [
       { id: "g1", pairKey: "X|Y", teamA: "X", teamB: "Y" },
       { id: "g2", pairKey: "X|Z", teamA: "X", teamB: "Z" },
     ];
-    const result = await solvePhase2({
+    const result = await solveSlotAssignment({
       games,
       buckets: 2,
       courtSlots: [
@@ -98,11 +102,11 @@ describe("Phase 2: slot/court ILP", () => {
   it("honors a team's early time preference when capacity allows", async () => {
     // 2 games across 4 buckets × 1 court. Team A prefers early; it should
     // land in bucket 0 or 1 (the early half), not 2 or 3.
-    const games: Phase2Game[] = [
+    const games: SlotAssignmentGame[] = [
       { id: "g1", pairKey: "A|B", teamA: "A", teamB: "B" },
       { id: "g2", pairKey: "C|D", teamA: "C", teamB: "D" },
     ];
-    const result = await solvePhase2({
+    const result = await solveSlotAssignment({
       games,
       buckets: 4,
       courtsPerBucket: 1,
@@ -120,11 +124,11 @@ describe("Phase 2: slot/court ILP", () => {
 
   it("prefers week_specific_time over preferred_time when both are set", async () => {
     // Team A has preferred_time=early but week_specific=late. Expect late.
-    const games: Phase2Game[] = [
+    const games: SlotAssignmentGame[] = [
       { id: "g1", pairKey: "A|B", teamA: "A", teamB: "B" },
       { id: "g2", pairKey: "C|D", teamA: "C", teamB: "D" },
     ];
-    const result = await solvePhase2({
+    const result = await solveSlotAssignment({
       games,
       buckets: 4,
       courtsPerBucket: 1,
@@ -141,7 +145,7 @@ describe("Phase 2: slot/court ILP", () => {
   }, 15_000);
 
   it("LP builder emits valid CPLEX LP with binary section", () => {
-    const { lp } = buildPhase2LP({
+    const { lp } = buildSlotAssignmentLP({
       games: [{ id: "g1", pairKey: "A|B", teamA: "A", teamB: "B" }],
       buckets: 2,
       courtsPerBucket: 1,

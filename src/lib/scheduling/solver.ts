@@ -11,14 +11,14 @@ import {
   type LocationCourtSlot,
 } from "./location-assignment";
 import {
-  buildPhase1InputFromWeekFill,
-  solvePhase1,
-  type Phase1Assignment,
+  buildMatchupSelectionInputFromWeekFill,
+  solveMatchupSelection,
+  type MatchupSelectionAssignment,
 } from "./solver/matchup-selection";
 import {
-  solvePhase2,
-  type Phase2Game,
-  type Phase2TeamPreference,
+  solveSlotAssignment,
+  type SlotAssignmentGame,
+  type SlotAssignmentTeamPreference,
 } from "./solver/slot-assignment";
 import type { PreferenceApplied } from "@/lib/types";
 
@@ -34,8 +34,8 @@ export interface SolveScheduleResult extends WeekFillResult {
 }
 
 /**
- * Two-phase ILP scheduler. Phase 1 assigns pairs to weeks (HiGHS MIP),
- * Phase 2 assigns each week's games to (bucket, court, location) when venue
+ * Two-stage ILP scheduler. Matchup selection assigns pairs to weeks (HiGHS MIP),
+ * then slot assignment places each week's games to (bucket, court, location) when venue
  * court slots are provided.
  */
 export async function solveSchedule(
@@ -65,8 +65,8 @@ export async function solveSchedule(
 
   const forbiddenWeeksByTeam = buildForbiddenWeeks(teams, gameDays);
 
-  // ── Phase 1: pair → week ──────────────────────────────────────────────────
-  const phase1Input = buildPhase1InputFromWeekFill(
+  // ── Matchup selection: pair → week ────────────────────────────────────────
+  const matchupSelectionInput = buildMatchupSelectionInputFromWeekFill(
     teams,
     pattern,
     opts,
@@ -78,38 +78,40 @@ export async function solveSchedule(
       forbiddenWeeksByTeam,
     }
   );
-  const phase1 = await solvePhase1(phase1Input);
-  if (phase1.status !== "Optimal") {
-    throw new Error(`Phase 1 solver returned status=${phase1.status}`);
+  const matchupSelection = await solveMatchupSelection(matchupSelectionInput);
+  if (matchupSelection.status !== "Optimal") {
+    throw new Error(
+      `Matchup selection solver returned status=${matchupSelection.status}`
+    );
   }
 
-  // Group Phase 1 assignments by week.
-  const assignmentsByWeek = new Map<number, Phase1Assignment[]>();
-  for (const a of phase1.assignments) {
+  // Group matchup-selection assignments by week.
+  const assignmentsByWeek = new Map<number, MatchupSelectionAssignment[]>();
+  for (const a of matchupSelection.assignments) {
     const arr = assignmentsByWeek.get(a.week) || [];
     arr.push(a);
     assignmentsByWeek.set(a.week, arr);
   }
 
-  // ── Phase 2: per-week slot/court assignment ───────────────────────────────
+  // ── Slot assignment: per-week slot/court placement ────────────────────────
   const games: WeekFillScheduledGame[] = [];
   const pairTeams = new Map<string, { teamA: string; teamB: string }>();
-  for (const p of phase1Input.pairs) {
+  for (const p of matchupSelectionInput.pairs) {
     pairTeams.set(p.key, { teamA: p.teamA, teamB: p.teamB });
   }
 
   const teamsById = new Map(teams.map((t) => [t.id, t]));
 
   const [sh, sm] = pattern.startTime.split(":").map(Number);
-  let phase2ObjectiveTotal = 0;
-  let phase2WeeksSolved = 0;
+  let slotAssignmentObjectiveTotal = 0;
+  let slotAssignmentWeeksSolved = 0;
   for (let weekIdx = 0; weekIdx < gameDays.length; weekIdx++) {
     const weekNumber = weekIdx + 1;
     const dayDate = gameDays[weekIdx];
     const weekAssignments = assignmentsByWeek.get(weekNumber) || [];
     if (weekAssignments.length === 0) continue;
 
-    const phase2Games: Phase2Game[] = weekAssignments.map((a, idx) => {
+    const scheduledWeekGames: SlotAssignmentGame[] = weekAssignments.map((a, idx) => {
       const teamsForPair = pairTeams.get(a.pairKey)!;
       return {
         id: `w${weekNumber}_${idx}`,
@@ -119,7 +121,11 @@ export async function solveSchedule(
       };
     });
 
-    const teamPreferences = buildWeekPreferences(teamsById, phase2Games, weekNumber);
+    const teamPreferences = buildWeekPreferences(
+      teamsById,
+      scheduledWeekGames,
+      weekNumber
+    );
     const weekCourtSlots = locationOptions?.courtSlots.length
       ? filterWeekCourtSlots(
           locationOptions.courtSlots,
@@ -128,24 +134,24 @@ export async function solveSchedule(
         )
       : undefined;
 
-    const phase2 = await solvePhase2({
-      games: phase2Games,
+    const slotAssignment = await solveSlotAssignment({
+      games: scheduledWeekGames,
       buckets: slotsPerDay,
       courtsPerBucket: pattern.courtCount,
       courtSlots: weekCourtSlots,
       teamPreferences,
     });
-    if (phase2.status !== "Optimal") {
+    if (slotAssignment.status !== "Optimal") {
       throw new Error(
-        `Phase 2 solver returned status=${phase2.status} for week ${weekNumber}`
+        `Slot assignment solver returned status=${slotAssignment.status} for week ${weekNumber}`
       );
     }
-    phase2ObjectiveTotal += phase2.objective;
-    phase2WeeksSolved++;
+    slotAssignmentObjectiveTotal += slotAssignment.objective;
+    slotAssignmentWeeksSolved++;
 
     // Emit games at their solved (bucket, court).
-    for (const slot of phase2.slots) {
-      const g = phase2Games.find((x) => x.id === slot.gameId);
+    for (const slot of slotAssignment.slots) {
+      const g = scheduledWeekGames.find((x) => x.id === slot.gameId);
       if (!g) continue;
       const scheduledAt = new Date(dayDate);
       scheduledAt.setHours(sh, sm, 0, 0);
@@ -186,10 +192,12 @@ export async function solveSchedule(
   const byes = computeByes(teams, games, gameDays);
 
   const notes: string[] = [];
-  if (phase1.notes.length > 0) notes.push(...phase1.notes);
-  notes.push(`Solver: Phase 1 objective ${phase1.objective.toFixed(0)}`);
+  if (matchupSelection.notes.length > 0) notes.push(...matchupSelection.notes);
   notes.push(
-    `Solver: Phase 2 objective ${phase2ObjectiveTotal.toFixed(0)} across ${phase2WeeksSolved} week${phase2WeeksSolved === 1 ? "" : "s"}`
+    `Solver: Matchup selection objective ${matchupSelection.objective.toFixed(0)}`
+  );
+  notes.push(
+    `Solver: Slot assignment objective ${slotAssignmentObjectiveTotal.toFixed(0)} across ${slotAssignmentWeeksSolved} week${slotAssignmentWeeksSolved === 1 ? "" : "s"}`
   );
   notes.push(
     `Solver: scheduled ${games.length} game${games.length === 1 ? "" : "s"} across ${targetWeeks} target week${targetWeeks === 1 ? "" : "s"}`
@@ -202,7 +210,7 @@ export async function solveSchedule(
     games,
     byes,
     notes,
-    droppedPairs: phase1.droppedPairs.map((d) => ({
+    droppedPairs: matchupSelection.droppedPairs.map((d) => ({
       teamA: d.teamA,
       teamB: d.teamB,
       reason:
@@ -248,10 +256,10 @@ function buildForbiddenWeeks(
 // signal is forwarded to Phase 2 (matching greedy's exclusive-choice behavior).
 function buildWeekPreferences(
   teamsById: Map<string, WeekFillTeam>,
-  games: Phase2Game[],
+  games: SlotAssignmentGame[],
   weekNumber: number
-): Phase2TeamPreference[] {
-  const result: Phase2TeamPreference[] = [];
+): SlotAssignmentTeamPreference[] {
+  const result: SlotAssignmentTeamPreference[] = [];
   const seen = new Set<string>();
   for (const g of games) {
     for (const teamId of [g.teamA, g.teamB]) {

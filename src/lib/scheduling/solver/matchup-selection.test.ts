@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
-  buildPhase1LP,
-  buildPhase1InputFromWeekFill,
-  solvePhase1,
+  buildMatchupSelectionLP,
+  buildMatchupSelectionInputFromWeekFill,
+  solveMatchupSelection,
 } from "./matchup-selection";
 
 describe("Phase 1: matchup-to-week ILP", () => {
@@ -30,8 +30,8 @@ describe("Phase 1: matchup-to-week ILP", () => {
       gamesPerTeam: 3,
     };
 
-    const input = buildPhase1InputFromWeekFill(teams, pattern, opts, 3, 2);
-    const result = await solvePhase1(input);
+    const input = buildMatchupSelectionInputFromWeekFill(teams, pattern, opts, 3, 2);
+    const result = await solveMatchupSelection(input);
 
     expect(result.status).toBe("Optimal");
     // Full RR = 6 pairs, all must be scheduled.
@@ -91,8 +91,8 @@ describe("Phase 1: matchup-to-week ILP", () => {
       allowCrossPlay: false,
       gamesPerTeam: 5,
     };
-    const input = buildPhase1InputFromWeekFill(teams, pattern, opts, 5, 3);
-    const result = await solvePhase1(input);
+    const input = buildMatchupSelectionInputFromWeekFill(teams, pattern, opts, 5, 3);
+    const result = await solveMatchupSelection(input);
 
     expect(result.status).toBe("Optimal");
     // C(6,2) = 15 pairs.
@@ -140,8 +140,8 @@ describe("Phase 1: matchup-to-week ILP", () => {
       allowCrossPlay: false,
       gamesPerTeam: 6,
     };
-    const input = buildPhase1InputFromWeekFill(teams, pattern, opts, 3, 4);
-    const result = await solvePhase1(input);
+    const input = buildMatchupSelectionInputFromWeekFill(teams, pattern, opts, 3, 4);
+    const result = await solveMatchupSelection(input);
 
     expect(result.status).toBe("Optimal");
     expect(result.assignments.length).toBe(12);
@@ -195,7 +195,7 @@ describe("Phase 1: matchup-to-week ILP", () => {
       ...pattern,
       endsOn: new Date("2026-02-16"),
     };
-    const input = buildPhase1InputFromWeekFill(
+    const input = buildMatchupSelectionInputFromWeekFill(
       teams,
       loose,
       opts,
@@ -205,7 +205,7 @@ describe("Phase 1: matchup-to-week ILP", () => {
         forbiddenWeeksByTeam: new Map([["T1", new Set([2])]]),
       }
     );
-    const result = await solvePhase1(input);
+    const result = await solveMatchupSelection(input);
     expect(result.status).toBe("Optimal");
 
     let t1PlaysWeek2 = 0;
@@ -240,8 +240,8 @@ describe("Phase 1: matchup-to-week ILP", () => {
       allowCrossPlay: false,
       gamesPerTeam: 2,
     };
-    const input = buildPhase1InputFromWeekFill(teams, pattern, opts, 3, 1);
-    const { lp } = buildPhase1LP(input);
+    const input = buildMatchupSelectionInputFromWeekFill(teams, pattern, opts, 3, 1);
+    const { lp } = buildMatchupSelectionLP(input);
     expect(lp).toContain("Minimize");
     expect(lp).toContain("Subject To");
     expect(lp).toContain("End");
@@ -272,7 +272,7 @@ describe("Phase 1: matchup-to-week ILP", () => {
       allowCrossPlay: false,
       gamesPerTeam: 2,
     };
-    const input = buildPhase1InputFromWeekFill(teams, pattern, opts, 3, 2, {
+    const input = buildMatchupSelectionInputFromWeekFill(teams, pattern, opts, 3, 2, {
       existingMatchupCounts: new Map([["a|b", 1]]),
       teamWeights: new Map([
         ["a", 0.90],
@@ -287,11 +287,11 @@ describe("Phase 1: matchup-to-week ILP", () => {
     expect(priorPair?.required).toBe(0);
     expect(priorPair?.skillAlignment).toBeCloseTo(0.95);
 
-    const { lp } = buildPhase1LP(input);
+    const { lp } = buildMatchupSelectionLP(input);
     expect(lp).toContain("50 x_a_b_w1");
     expect(lp).toContain("-25.650 x_a_b_w1");
 
-    const result = await solvePhase1(input);
+    const result = await solveMatchupSelection(input);
     expect(result.status).toBe("Optimal");
   }, 15_000);
 });

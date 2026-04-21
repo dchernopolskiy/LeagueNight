@@ -9,35 +9,35 @@
 
 export type BucketHalfPreference = "early" | "late";
 
-export interface Phase2TeamPreference {
+export interface SlotAssignmentTeamPreference {
   teamId: string;
   prefer: BucketHalfPreference;
   source: "preferred_time" | "week_specific_time";
 }
 
-export interface Phase2Game {
+export interface SlotAssignmentGame {
   id: string;
   pairKey: string;
   teamA: string;
   teamB: string;
 }
 
-export interface Phase2CourtSlot {
+export interface SlotAssignmentCourtSlot {
   locationId: string | null;
   locationName: string | null;
   courtNum: number;
   totalCourts: number;
 }
 
-export interface Phase2Input {
-  games: Phase2Game[];
+export interface SlotAssignmentInput {
+  games: SlotAssignmentGame[];
   buckets: number;
   courtsPerBucket?: number;
-  courtSlots?: Phase2CourtSlot[];
-  teamPreferences?: Phase2TeamPreference[];
+  courtSlots?: SlotAssignmentCourtSlot[];
+  teamPreferences?: SlotAssignmentTeamPreference[];
 }
 
-export interface Phase2Slot {
+export interface SlotAssignmentSlot {
   gameId: string;
   bucket: number;
   court: number;
@@ -50,8 +50,8 @@ export interface Phase2Slot {
   }>;
 }
 
-export interface Phase2Result {
-  slots: Phase2Slot[];
+export interface SlotAssignmentResult {
+  slots: SlotAssignmentSlot[];
   objective: number;
   status: string;
   notes: string[];
@@ -94,11 +94,11 @@ function teamLocationVar(teamId: string, locationId: string): string {
   return `tloc_${sanitize(teamId)}_${sanitize(locationId)}`;
 }
 
-export function buildPhase2LP(input: Phase2Input): {
+export function buildSlotAssignmentLP(input: SlotAssignmentInput): {
   lp: string;
   meta: {
-    gameKeyByVar: Map<string, { gameId: string; bucket: number; slot: Phase2CourtSlot }>;
-    slots: Phase2CourtSlot[];
+    gameKeyByVar: Map<string, { gameId: string; bucket: number; slot: SlotAssignmentCourtSlot }>;
+    slots: SlotAssignmentCourtSlot[];
   };
 } {
   const { games, buckets } = input;
@@ -113,14 +113,14 @@ export function buildPhase2LP(input: Phase2Input): {
 
   const gameKeyByVar = new Map<
     string,
-    { gameId: string; bucket: number; slot: Phase2CourtSlot }
+    { gameId: string; bucket: number; slot: SlotAssignmentCourtSlot }
   >();
 
   const objectiveTerms: string[] = [];
   const constraints: string[] = [];
   const binaries: string[] = [];
 
-  const gamesByTeam = new Map<string, Phase2Game[]>();
+  const gamesByTeam = new Map<string, SlotAssignmentGame[]>();
   for (const g of games) {
     for (const t of [g.teamA, g.teamB]) {
       const arr = gamesByTeam.get(t) || [];
@@ -152,7 +152,7 @@ export function buildPhase2LP(input: Phase2Input): {
     constraints.push(`${terms.join(" + ")} = 1`);
   }
 
-  const preferencesByTeam = new Map<string, Phase2TeamPreference>();
+  const preferencesByTeam = new Map<string, SlotAssignmentTeamPreference>();
   for (const p of input.teamPreferences || []) {
     const existing = preferencesByTeam.get(p.teamId);
     if (
@@ -277,17 +277,19 @@ export function buildPhase2LP(input: Phase2Input): {
   };
 }
 
-export async function solvePhase2(input: Phase2Input): Promise<Phase2Result> {
-  const { lp, meta } = buildPhase2LP(input);
+export async function solveSlotAssignment(
+  input: SlotAssignmentInput
+): Promise<SlotAssignmentResult> {
+  const { lp, meta } = buildSlotAssignmentLP(input);
   const highs = await loadHighs();
   const result = highs.solve(lp);
 
   const notes: string[] = [];
   if (result.Status !== "Optimal") {
-    notes.push(`Phase 2 solver status: ${result.Status}`);
+    notes.push(`Slot assignment solver status: ${result.Status}`);
   }
 
-  const preferencesByTeam = new Map<string, Phase2TeamPreference>();
+  const preferencesByTeam = new Map<string, SlotAssignmentTeamPreference>();
   for (const p of input.teamPreferences || []) {
     const existing = preferencesByTeam.get(p.teamId);
     if (
@@ -300,7 +302,7 @@ export async function solvePhase2(input: Phase2Input): Promise<Phase2Result> {
   const gameById = new Map(input.games.map((g) => [g.id, g]));
   const midBucket = Math.ceil(input.buckets / 2);
 
-  const slots: Phase2Slot[] = [];
+  const slots: SlotAssignmentSlot[] = [];
   for (const [name, col] of Object.entries(result.Columns)) {
     if (!name.startsWith("y_")) continue;
     if (Math.round(col.Primal) !== 1) continue;
@@ -308,7 +310,7 @@ export async function solvePhase2(input: Phase2Input): Promise<Phase2Result> {
     if (!ref) continue;
 
     const game = gameById.get(ref.gameId);
-    const preferenceHits: Phase2Slot["preferenceHits"] = [];
+    const preferenceHits: SlotAssignmentSlot["preferenceHits"] = [];
     if (game && input.buckets > 1) {
       const isEarly = ref.bucket < midBucket;
       const isLate = ref.bucket >= midBucket;
