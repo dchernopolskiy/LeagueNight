@@ -38,7 +38,7 @@ import type { GameDayPattern, Location, LocationUnavailability } from "@/lib/typ
 
 const DAY_LABELS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 const DAY_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-type SchedulerEngine = "greedy" | "solver";
+type SchedulerEngine = "greedy" | "solver" | "service";
 const DURATION_OPTIONS = [30, 45, 60, 75, 90, 120];
 
 // ── Holiday helpers ──────────────────────────────────────────────────────────
@@ -160,7 +160,7 @@ export function GameDaySetupPanel({
   const [showForm, setShowForm] = useState(patterns.length === 0);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm());
-  const [schedulerEngine, setSchedulerEngine] = useState<SchedulerEngine>("solver");
+  const [schedulerEngine, setSchedulerEngine] = useState<SchedulerEngine>("service");
   const [saving, setSaving] = useState(false);
 
   // Inline "Add location" state
@@ -816,6 +816,7 @@ export function GameDaySetupPanel({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="service">CP-SAT</SelectItem>
                 <SelectItem value="greedy">Greedy</SelectItem>
                 <SelectItem value="solver">Solver</SelectItem>
               </SelectContent>
@@ -1025,6 +1026,7 @@ export function GameDaySetupPanel({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="service">CP-SAT (service)</SelectItem>
                   <SelectItem value="greedy">Greedy</SelectItem>
                   <SelectItem value="solver">Solver</SelectItem>
                 </SelectContent>

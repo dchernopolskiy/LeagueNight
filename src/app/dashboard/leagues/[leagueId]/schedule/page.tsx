@@ -70,12 +70,17 @@ function Stat({ label, value, warn }: { label: string; value: string | number; w
 }
 
 function formatSchedulerLabel(
-  scheduler?: { requestedEngine: "greedy" | "solver"; engineUsed: "greedy" | "solver" }
+  scheduler?: {
+    requestedEngine: "greedy" | "solver" | "service";
+    engineUsed: "greedy" | "solver" | "service";
+  }
 ): string {
-  if (!scheduler) return "Solver";
-  const used = scheduler.engineUsed === "solver" ? "Solver" : "Greedy";
+  if (!scheduler) return "CP-SAT";
+  const formatEngine = (engine: "greedy" | "solver" | "service") =>
+    engine === "service" ? "CP-SAT" : engine === "solver" ? "Solver" : "Greedy";
+  const used = formatEngine(scheduler.engineUsed);
   if (scheduler.requestedEngine === scheduler.engineUsed) return used;
-  const requested = scheduler.requestedEngine === "solver" ? "Solver" : "Greedy";
+  const requested = formatEngine(scheduler.requestedEngine);
   return `${requested} -> ${used}`;
 }
 
@@ -135,8 +140,8 @@ export default function SchedulePage() {
       matchupFrequency: number;
     };
     scheduler?: {
-      requestedEngine: "greedy" | "solver";
-      engineUsed: "greedy" | "solver";
+      requestedEngine: "greedy" | "solver" | "service";
+      engineUsed: "greedy" | "solver" | "service";
     };
     warnings?: string[];
     generatedAt: string;
@@ -250,7 +255,7 @@ export default function SchedulePage() {
       regenerateFrom?: string;
       locationIds: string[];
       reseedMode?: "by_skill" | "within_division";
-      engine?: "greedy" | "solver";
+      engine?: "greedy" | "solver" | "service";
     },
     acceptTruncation = false
   ) {

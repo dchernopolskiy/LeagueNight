@@ -7,6 +7,8 @@
 // one location on a given night.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { solveInWorker, type HighsResult } from "./highs-loader";
+
 export type BucketHalfPreference = "early" | "late";
 
 export interface SlotAssignmentTeamPreference {
@@ -57,21 +59,6 @@ export interface SlotAssignmentResult {
   notes: string[];
 }
 
-type HighsModule = {
-  solve: (lp: string) => HighsResult;
-};
-type HighsResult = {
-  Status: string;
-  ObjectiveValue: number;
-  Columns: Record<string, { Primal: number; Name: string }>;
-};
-
-async function loadHighs(): Promise<HighsModule> {
-  const mod = await import("highs");
-  const loader = (mod as unknown as { default: () => Promise<HighsModule> })
-    .default;
-  return loader();
-}
 
 const PENALTY_GAP = 100;
 const PENALTY_LATER_BUCKET = 1;
@@ -238,19 +225,41 @@ export function buildSlotAssignmentLP(input: SlotAssignmentInput): {
     ...new Set(slots.map((slot) => slot.locationId).filter((id): id is string => !!id)),
   ];
   if (locationIds.length > 1) {
+    // Precompute slot indices by location so the per-team-game-venue constraint
+    // can sum over them cheaply. A naive "for every y[g,b,s] emit a separate
+    // y - tloc ≤ 0" would produce O(teams × venues × games × buckets × slots)
+    // constraints — ~30K+ for realistic inputs — which tips HiGHS's presolve
+    // into aborts. Collapsing to one `Σ y ≤ tloc` per (team, game, venue) keeps
+    // the same feasible set with O(teams × games × venues) rows.
+    const slotIdxsByLocation = new Map<string, number[]>();
+    for (let s = 0; s < slots.length; s++) {
+      const lid = slots[s].locationId;
+      if (!lid) continue;
+      const arr = slotIdxsByLocation.get(lid) || [];
+      arr.push(s);
+      slotIdxsByLocation.set(lid, arr);
+    }
     for (const [team, teamGames] of gamesByTeam) {
       const teamLocationVars: string[] = [];
       for (const locationId of locationIds) {
         const tv = teamLocationVar(team, locationId);
         binaries.push(tv);
         teamLocationVars.push(tv);
+        const slotIdxs = slotIdxsByLocation.get(locationId) || [];
+        if (slotIdxs.length === 0) continue;
         for (const g of teamGames) {
+          const yTerms: string[] = [];
           for (let b = 0; b < buckets; b++) {
-            for (let s = 0; s < slots.length; s++) {
-              if (slots[s].locationId !== locationId) continue;
-              constraints.push(`${yVar(g.id, b, s)} - ${tv} <= 0`);
+            for (const s of slotIdxs) {
+              yTerms.push(yVar(g.id, b, s));
             }
           }
+          if (yTerms.length === 0) continue;
+          // Σ y[g,b,s ∈ venue] − M·tloc ≤ 0, where M is the max plays in the
+          // venue (buckets) — safe upper bound since each team plays at most
+          // once per bucket.
+          const M = buckets;
+          constraints.push(`${yTerms.join(" + ")} - ${M} ${tv} <= 0`);
         }
       }
       constraints.push(`${teamLocationVars.join(" + ")} <= 1`);
@@ -289,12 +298,11 @@ export async function solveSlotAssignment(
   input: SlotAssignmentInput
 ): Promise<SlotAssignmentResult> {
   const { lp, meta, stats } = buildSlotAssignmentLP(input);
-  const highs = await loadHighs();
   const memBefore = process.memoryUsage();
   const tStart = Date.now();
   let result: HighsResult;
   try {
-    result = highs.solve(lp);
+    result = await solveInWorker(lp);
   } catch (err) {
     const memAtFail = process.memoryUsage();
     const details = [

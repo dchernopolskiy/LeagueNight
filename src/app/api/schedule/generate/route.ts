@@ -11,6 +11,7 @@ import {
 import {
   buildCourtSlots,
   formatLocationSplitWarning,
+  type SchedulerEngine,
   toAssignedGamesInsertRows,
   toScheduledGamesInsertRows,
   validateGenerateRequest,
@@ -19,6 +20,48 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+
+type LocalSchedulerResult = Awaited<ReturnType<typeof fillScheduleByWeek>>;
+type SolverSchedulerResult = Awaited<ReturnType<typeof solveSchedule>>;
+type RouteSchedulerResult = LocalSchedulerResult | SolverSchedulerResult;
+
+type SchedulerServicePreferences = {
+  home_team?: string[];
+  away_team?: string[];
+};
+
+type SchedulerServiceResponse = {
+  status: "ok" | "partial" | "infeasible";
+  games: Array<{
+    home_team_id: string;
+    away_team_id: string;
+    scheduled_at: string;
+    venue_id: string | null;
+    court_number: number;
+    week_number: number;
+    preferences_honored?: SchedulerServicePreferences | null;
+    scheduling_notes?: string | null;
+  }>;
+  byes: Array<{
+    team_id: string;
+    date: string;
+    week_number: number;
+    back_to_back: boolean;
+  }>;
+  dropped_pairs: Array<{
+    team_a_id: string;
+    team_b_id: string;
+    missed_count: number;
+    reason: string;
+  }>;
+  diagnostics: {
+    target_weeks: number;
+    available_weeks: number;
+    solver_wall_time_ms: number;
+    objective: number;
+    notes: string[];
+  };
+};
 
 export async function POST(request: NextRequest) {
   const profile = await getProfile();
@@ -39,7 +82,7 @@ export async function POST(request: NextRequest) {
     locationIds = [],
     acceptTruncation = false,
     reseedMode,
-    engine = "solver",
+    engine = "service",
   }: {
     leagueId: string;
     patternId: string;
@@ -52,7 +95,7 @@ export async function POST(request: NextRequest) {
     locationIds?: string[];
     acceptTruncation?: boolean;
     reseedMode?: ReseedMode;
-    engine?: "greedy" | "solver";
+    engine?: SchedulerEngine;
   } = body;
 
   const validationError = validateGenerateRequest({
@@ -319,12 +362,47 @@ export async function POST(request: NextRequest) {
     existingMatchupCounts,
     teamWeights: reseedTeamWeights || undefined,
   };
-  const requestedEngine: "greedy" | "solver" = engine === "solver" ? "solver" : "greedy";
-  let engineUsed: "greedy" | "solver" = requestedEngine;
+  const requestedEngine: SchedulerEngine =
+    engine === "service" ? "service" : engine === "solver" ? "solver" : "greedy";
+  let engineUsed: SchedulerEngine = requestedEngine;
   const schedulerWarnings: string[] = [];
-  let result: Awaited<ReturnType<typeof fillScheduleByWeek>> | Awaited<ReturnType<typeof solveSchedule>>;
+  let result: RouteSchedulerResult;
   const courtSlots = buildCourtSlots(effectiveLocationIds, locationsMap);
-  if (requestedEngine === "solver") {
+  if (requestedEngine === "service") {
+    try {
+      const serviceResult = await callSchedulerService({
+        timezone,
+        gamesPerTeam,
+        gamesPerSession,
+        matchupFrequency,
+        mergedSkipDates,
+        effectiveMixDivisions,
+        effectiveCrossPlayRules,
+        regenerateFrom,
+        existingMatchupCounts,
+        pattern,
+        weekFillTeams,
+        reseedTeamWeights,
+        locationsData,
+        unavailByDate,
+      });
+      if (serviceResult.status === "infeasible") {
+        engineUsed = "greedy";
+        schedulerWarnings.push(
+          "CP-SAT service returned infeasible; used greedy scheduler instead."
+        );
+        result = fillScheduleByWeek(fillParams);
+      } else {
+        result = normalizeServiceResult(serviceResult, locationsMap);
+      }
+    } catch (err) {
+      engineUsed = "greedy";
+      schedulerWarnings.push(
+        `CP-SAT service failed before persistence (${formatSchedulerError(err)}); used greedy scheduler instead.`
+      );
+      result = fillScheduleByWeek(fillParams);
+    }
+  } else if (requestedEngine === "solver") {
     try {
       result = await solveSchedule(fillParams, {
         courtSlots,
@@ -379,7 +457,16 @@ export async function POST(request: NextRequest) {
   const gamesToInsert = [];
   let locationAssignmentDroppedCount = 0;
 
-  if (engineUsed === "solver" && "locationSplitCount" in result) {
+  if (engineUsed === "service") {
+    gamesToInsert.push(
+      ...toScheduledGamesInsertRows({
+        leagueId,
+        timezone,
+        games: result.games,
+        defaultLocationId: pattern.location_ids?.[0] || null,
+      })
+    );
+  } else if (engineUsed === "solver" && "locationSplitCount" in result) {
     locationAssignmentDroppedCount = result.locationAssignmentDroppedCount || 0;
     if ((result.locationSplitCount || 0) > 0) {
       schedulerWarnings.push(
@@ -483,4 +570,150 @@ function formatSchedulerError(err: unknown): string {
     return parts.join(" | ");
   }
   return String(err);
+}
+
+async function callSchedulerService(input: {
+  timezone: string;
+  gamesPerTeam: number;
+  gamesPerSession: number;
+  matchupFrequency: number;
+  mergedSkipDates: string[];
+  effectiveMixDivisions: boolean;
+  effectiveCrossPlayRules: Array<{ division_a_id: string; division_b_id: string }>;
+  regenerateFrom?: string;
+  existingMatchupCounts: Map<string, number>;
+  pattern: {
+    starts_on: string;
+    ends_on: string | null;
+    day_of_week: number;
+    start_time: string;
+    end_time: string | null;
+    duration_minutes: number | null;
+  };
+  weekFillTeams: Array<{
+    id: string;
+    name: string;
+    division_id: string | null;
+    preferences?: unknown;
+  }>;
+  reseedTeamWeights: Map<string, number> | null;
+  locationsData: Array<{ id: string; name: string; court_count: number }>;
+  unavailByDate: Map<string, Set<string>>;
+}): Promise<SchedulerServiceResponse> {
+  const baseUrl = process.env.SCHEDULER_SERVICE_URL;
+  const token = process.env.SCHEDULER_SERVICE_TOKEN;
+  if (!baseUrl || !token) {
+    throw new Error("scheduler service env vars are not configured");
+  }
+
+  const venues = input.locationsData.map((location) => ({
+    id: location.id,
+    name: location.name,
+    court_count: location.court_count,
+    unavailable_dates: Array.from(input.unavailByDate.entries())
+      .filter(([, ids]) => ids.has(location.id))
+      .map(([date]) => date)
+      .sort(),
+  }));
+
+  const payload = {
+    league: {
+      start_date: input.regenerateFrom ?? input.pattern.starts_on,
+      end_date: input.pattern.ends_on,
+      day_of_week: input.pattern.day_of_week,
+      start_time: input.pattern.start_time.slice(0, 5),
+      end_time: input.pattern.end_time ? input.pattern.end_time.slice(0, 5) : null,
+      duration_minutes: input.pattern.duration_minutes || 60,
+      skip_dates: input.mergedSkipDates,
+      games_per_team: input.gamesPerTeam,
+      matchup_frequency: input.matchupFrequency,
+      games_per_session: input.gamesPerSession,
+      allow_cross_play: input.effectiveMixDivisions,
+      cross_play_rules: input.effectiveCrossPlayRules,
+    },
+    teams: input.weekFillTeams.map((team) => ({
+      id: team.id,
+      name: team.name,
+      division_id: team.division_id,
+      weight: input.reseedTeamWeights?.get(team.id),
+      preferences: team.preferences ?? {},
+    })),
+    venues,
+    regeneration: input.regenerateFrom
+      ? {
+          from_date: input.regenerateFrom,
+          existing_matchup_counts: Object.fromEntries(input.existingMatchupCounts),
+        }
+      : null,
+  };
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 58_000);
+  try {
+    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/solve`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    const data = (await response.json().catch(() => null)) as
+      | SchedulerServiceResponse
+      | { error?: string; message?: string }
+      | null;
+
+    if (!response.ok) {
+      throw new Error(
+        `scheduler service ${response.status}: ${data && "message" in data ? data.message || data.error || "request failed" : "request failed"}`
+      );
+    }
+
+    return data as SchedulerServiceResponse;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function normalizeServiceResult(
+  serviceResult: SchedulerServiceResponse,
+  locationsMap: Map<string, { id: string; name: string; court_count: number }>
+): LocalSchedulerResult {
+  return {
+    games: serviceResult.games.map((game) => {
+      const location = game.venue_id ? locationsMap.get(game.venue_id) : null;
+      return {
+        home: game.home_team_id,
+        away: game.away_team_id,
+        scheduledAt: parseLocalDate(game.scheduled_at),
+        venue: location?.name ?? null,
+        locationId: game.venue_id,
+        court: location && location.court_count > 1 ? `Court ${game.court_number}` : null,
+        weekNumber: game.week_number,
+        preferenceApplied:
+          game.preferences_honored &&
+          ((game.preferences_honored.home_team?.length || 0) > 0 ||
+            (game.preferences_honored.away_team?.length || 0) > 0)
+            ? game.preferences_honored
+            : null,
+        schedulingNotes: game.scheduling_notes ?? null,
+      };
+    }),
+    byes: serviceResult.byes.map((bye) => ({
+      teamId: bye.team_id,
+      date: parseLocalDate(bye.date),
+      weekNumber: bye.week_number,
+      backToBack: bye.back_to_back,
+    })),
+    notes: serviceResult.diagnostics.notes || [],
+    droppedPairs: serviceResult.dropped_pairs.map((pair) => ({
+      teamA: pair.team_a_id,
+      teamB: pair.team_b_id,
+      reason: pair.reason,
+    })),
+    targetWeeks: serviceResult.diagnostics.target_weeks,
+    availableWeeks: serviceResult.diagnostics.available_weeks,
+  };
 }

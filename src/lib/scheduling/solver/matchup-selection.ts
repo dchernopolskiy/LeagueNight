@@ -3,6 +3,7 @@ import type {
   WeekFillPattern,
   WeekFillTeam,
 } from "../week-fill";
+import { solveInWorker, type HighsResult } from "./highs-loader";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Phase 1 — matchup-to-week assignment via ILP (HiGHS).
@@ -63,31 +64,6 @@ export interface MatchupSelectionResult {
   notes: string[];
   objective: number;
   status: string;
-}
-
-/**
- * Lazily-loaded HiGHS WASM solver. Re-importing between calls is cheap; the
- * wasm module itself is cached by Node's module resolver.
- */
-type HighsModule = {
-  solve: (lp: string) => HighsResult;
-};
-type HighsResult = {
-  Status: string;
-  ObjectiveValue: number;
-  Columns: Record<string, { Primal: number; Name: string }>;
-};
-
-// HiGHS WASM holds solver state in the module instance; calling .solve()
-// multiple times on the same instance corrupts internal memory (observed:
-// "RuntimeError: memory access out of bounds" on the 3rd+ call). We pay a
-// small init cost per solve to guarantee a clean state — for our problem
-// sizes the wasm boot is dominated by the solve itself.
-async function loadHighs(): Promise<HighsModule> {
-  const mod = await import("highs");
-  const loader = (mod as unknown as { default: () => Promise<HighsModule> })
-    .default;
-  return loader();
 }
 
 // ── LP construction ─────────────────────────────────────────────────────────
@@ -375,12 +351,11 @@ export async function solveMatchupSelection(
   input: MatchupSelectionInput
 ): Promise<MatchupSelectionResult> {
   const { lp, meta, binaries, generals } = buildMatchupSelectionLP(input);
-  const highs = await loadHighs();
   const memBefore = process.memoryUsage();
   const tStart = Date.now();
   let result: HighsResult;
   try {
-    result = highs.solve(lp);
+    result = await solveInWorker(lp);
   } catch (err) {
     const memAtFail = process.memoryUsage();
     const details = [
