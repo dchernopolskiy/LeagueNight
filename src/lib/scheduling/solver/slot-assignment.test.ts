@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildPhase2LP, solvePhase2, type Phase2Game } from "./phase2";
+import { buildPhase2LP, solvePhase2, type Phase2Game } from "./slot-assignment";
 
 describe("Phase 2: slot/court ILP", () => {
   it("places 2 games in 2 buckets × 1 court with adjacent scheduling", async () => {

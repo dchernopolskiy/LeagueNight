@@ -14,12 +14,12 @@ import {
   buildPhase1InputFromWeekFill,
   solvePhase1,
   type Phase1Assignment,
-} from "./solver/phase1";
+} from "./solver/matchup-selection";
 import {
   solvePhase2,
   type Phase2Game,
   type Phase2TeamPreference,
-} from "./solver/phase2";
+} from "./solver/slot-assignment";
 import type { PreferenceApplied } from "@/lib/types";
 
 export interface SolveScheduleLocationOptions {

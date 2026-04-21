@@ -3,7 +3,7 @@ import {
   buildPhase1LP,
   buildPhase1InputFromWeekFill,
   solvePhase1,
-} from "./phase1";
+} from "./matchup-selection";
 
 describe("Phase 1: matchup-to-week ILP", () => {
   it("schedules a 4-team single round-robin across 3 weeks (gamesPerSession=1)", async () => {
