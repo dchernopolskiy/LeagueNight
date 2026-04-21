@@ -8,6 +8,16 @@ import type { Standing, Team } from "@/lib/types";
 // Default assumed length of a single game-day session when no end-time is configured.
 // Used to derive how many time slots fit in a day for round-robin-style court rotation.
 const DEFAULT_SESSION_HOURS = 8;
+const VALID_BRACKET_FORMATS = new Set(["single_elimination", "double_elimination"]);
+const VALID_SEED_MODES = new Set(["record", "points"]);
+
+function isIsoDate(value: unknown): value is string {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function isTimeString(value: unknown): value is string {
+  return typeof value === "string" && /^\d{2}:\d{2}$/.test(value);
+}
 
 export async function POST(request: NextRequest) {
   const profile = await getProfile();
@@ -42,6 +52,59 @@ export async function POST(request: NextRequest) {
   if (!numTeams || numTeams < 2) {
     return NextResponse.json(
       { error: "numTeams must be at least 2" },
+      { status: 400 }
+    );
+  }
+
+  if (!VALID_BRACKET_FORMATS.has(format)) {
+    return NextResponse.json({ error: "Invalid bracket format" }, { status: 400 });
+  }
+
+  if (!VALID_SEED_MODES.has(seedBy)) {
+    return NextResponse.json({ error: "Invalid seed mode" }, { status: 400 });
+  }
+
+  if (teamsPerBracket && teamsPerBracket < 2) {
+    return NextResponse.json(
+      { error: "teamsPerBracket must be at least 2" },
+      { status: 400 }
+    );
+  }
+
+  if (startDate && !isIsoDate(startDate)) {
+    return NextResponse.json({ error: "startDate must be YYYY-MM-DD" }, { status: 400 });
+  }
+
+  if (startDate && (!Array.isArray(daysOfWeek) || daysOfWeek.length === 0)) {
+    return NextResponse.json(
+      { error: "daysOfWeek is required when startDate is provided" },
+      { status: 400 }
+    );
+  }
+
+  if (
+    Array.isArray(daysOfWeek) &&
+    daysOfWeek.some((day) => !Number.isInteger(day) || day < 0 || day > 6)
+  ) {
+    return NextResponse.json(
+      { error: "daysOfWeek must contain integers from 0 to 6" },
+      { status: 400 }
+    );
+  }
+
+  if (defaultStartTime && !isTimeString(defaultStartTime)) {
+    return NextResponse.json(
+      { error: "defaultStartTime must be HH:MM" },
+      { status: 400 }
+    );
+  }
+
+  if (
+    defaultDurationMinutes != null &&
+    (!Number.isInteger(defaultDurationMinutes) || defaultDurationMinutes <= 0)
+  ) {
+    return NextResponse.json(
+      { error: "defaultDurationMinutes must be a positive integer" },
       { status: 400 }
     );
   }
