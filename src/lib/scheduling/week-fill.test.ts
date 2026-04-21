@@ -361,3 +361,81 @@ perEngine("scheduler: truncation under tight calendar", (mode) => {
     expect(report.stats.games).toBeLessThan(28); // C(8,2)=28
   });
 });
+
+perEngine("scheduler: preference parity", (mode) => {
+  it("annotates unavoidable bye-date violations in schedulingNotes", async () => {
+    const teams = [
+      { id: "t1", name: "Team 1", division_id: "d1", preferences: { bye_dates: ["2026-01-05"] } },
+      { id: "t2", name: "Team 2", division_id: "d1" },
+    ];
+    const pattern = defaultPattern({
+      courtCount: 1,
+      startsOn: new Date("2026-01-05"),
+      endsOn: new Date("2026-01-12"),
+    });
+    const teamsMap = new Map(
+      teams.map((t) => [
+        t.id,
+        { id: t.id, name: t.name, preferences: t.preferences },
+      ])
+    );
+
+    const result = await runScheduler(mode, {
+      teams,
+      pattern,
+      opts: {
+        matchupFrequency: 1,
+        gamesPerSession: 1,
+        allowCrossPlay: false,
+        gamesPerTeam: 1,
+      },
+      teamsMap,
+    });
+
+    expect(result.games).toHaveLength(1);
+    expect(result.games[0].schedulingNotes).toContain("Team 1 has bye on this date");
+  });
+
+  it("applies early/late time preferences when both halves are available", async () => {
+    const teams = [
+      { id: "a1", name: "A1", division_id: "A", preferences: { preferred_time: "early" as const } },
+      { id: "a2", name: "A2", division_id: "A", preferences: { preferred_time: "early" as const } },
+      { id: "b1", name: "B1", division_id: "B", preferences: { preferred_time: "late" as const } },
+      { id: "b2", name: "B2", division_id: "B", preferences: { preferred_time: "late" as const } },
+    ];
+    const pattern = defaultPattern({
+      courtCount: 1,
+      startTime: "18:00",
+      endTime: "20:00",
+      durationMinutes: 60,
+      startsOn: new Date("2026-01-05"),
+      endsOn: new Date("2026-01-12"),
+    });
+    const teamsMap = new Map(
+      teams.map((t) => [
+        t.id,
+        { id: t.id, name: t.name, preferences: t.preferences },
+      ])
+    );
+
+    const result = await runScheduler(mode, {
+      teams,
+      pattern,
+      opts: {
+        matchupFrequency: 1,
+        gamesPerSession: 1,
+        allowCrossPlay: false,
+        gamesPerTeam: 1,
+      },
+      teamsMap,
+    });
+
+    expect(result.games).toHaveLength(2);
+    const totalHits = result.games.reduce((count, game) => {
+      return count +
+        (game.preferenceApplied?.home_team?.filter((p) => p === "preferred_time").length || 0) +
+        (game.preferenceApplied?.away_team?.filter((p) => p === "preferred_time").length || 0);
+    }, 0);
+    expect(totalHits).toBe(4);
+  });
+});

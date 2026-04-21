@@ -589,49 +589,76 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
     }
 
     // Seed phase: place pre-assigned within-division matchups for this week
-    // into the earliest available slots (respecting bucket constraints).
+    // into the best available slots using the same preference scoring as the
+    // greedy fill (respecting bucket constraints).
     const seededPairs = seededByWeek.get(weekNumber) || [];
     for (const seed of seededPairs) {
+      let bestSlotIdx: number | null = null;
+      let bestScore = Number.NEGATIVE_INFINITY;
+      let bestMeta: { applied: PreferenceApplied; notes: string[] } | null = null;
+      const key = pairKey(seed.a, seed.b);
+      const pair = pairs.get(key);
+      if (!pair) continue;
+
       for (let slotIdx = 0; slotIdx < totalSlots; slotIdx++) {
         if (usedSlots.has(slotIdx)) continue;
         const bucket = slotBucket(slotIdx);
         const teamsInBucket = slotTeams.get(bucket) || new Set<string>();
         if (teamsInBucket.has(seed.a) || teamsInBucket.has(seed.b)) continue;
-        if ((gamesThisWeek.get(seed.a) || 0) >= opts.gamesPerSession) break;
-        if ((gamesThisWeek.get(seed.b) || 0) >= opts.gamesPerSession) break;
+        if ((gamesThisWeek.get(seed.a) || 0) >= opts.gamesPerSession) continue;
+        if ((gamesThisWeek.get(seed.b) || 0) >= opts.gamesPerSession) continue;
         const slotDate = slotTime(dayDate, slotIdx);
-        const courtNum = (slotIdx % courtCount) + 1;
-        const key = pairKey(seed.a, seed.b);
-        const pair = pairs.get(key);
-        if (!pair) break;
-
-        resultGames.push({
-          home: seed.a,
-          away: seed.b,
-          scheduledAt: slotDate,
-          venue: pattern.venue,
-          court: courtCount > 1 ? `Court ${courtNum}` : null,
+        const isEarly = bucket < midBucket || slotsPerDay === 1;
+        const isLate = bucket >= midBucket;
+        const scored = scorePair(
+          pair,
           weekNumber,
-          preferenceApplied: null,
-          schedulingNotes: null,
-        });
-
-        pair.playedCount += 1;
-        pair.exhausted = pair.playedCount >= pair.targetCount;
-        teamState.get(seed.a)!.gamesPlayed += 1;
-        teamState.get(seed.b)!.gamesPlayed += 1;
-        teamState.get(seed.a)!.lastPlayedWeek = weekNumber;
-        teamState.get(seed.b)!.lastPlayedWeek = weekNumber;
-        gamesThisWeek.set(seed.a, (gamesThisWeek.get(seed.a) || 0) + 1);
-        gamesThisWeek.set(seed.b, (gamesThisWeek.get(seed.b) || 0) + 1);
-        teamsInBucket.add(seed.a);
-        teamsInBucket.add(seed.b);
-        slotTeams.set(bucket, teamsInBucket);
-        usedSlots.add(slotIdx);
-        lastBucketByTeam.set(seed.a, bucket);
-        lastBucketByTeam.set(seed.b, bucket);
-        break;
+          slotDate,
+          isEarly,
+          isLate,
+          bucket,
+          lastBucketByTeam
+        );
+        if (!scored) continue;
+        if (scored.score > bestScore) {
+          bestScore = scored.score;
+          bestSlotIdx = slotIdx;
+          bestMeta = { applied: scored.applied, notes: scored.notes };
+        }
       }
+
+      if (bestSlotIdx === null || !bestMeta) continue;
+
+      const bucket = slotBucket(bestSlotIdx);
+      const teamsInBucket = slotTeams.get(bucket) || new Set<string>();
+      const slotDate = slotTime(dayDate, bestSlotIdx);
+      const courtNum = (bestSlotIdx % courtCount) + 1;
+
+      resultGames.push({
+        home: seed.a,
+        away: seed.b,
+        scheduledAt: slotDate,
+        venue: pattern.venue,
+        court: courtCount > 1 ? `Court ${courtNum}` : null,
+        weekNumber,
+        preferenceApplied: Object.keys(bestMeta.applied).length > 0 ? bestMeta.applied : null,
+        schedulingNotes: bestMeta.notes.length > 0 ? bestMeta.notes.join("; ") : null,
+      });
+
+      pair.playedCount += 1;
+      pair.exhausted = pair.playedCount >= pair.targetCount;
+      teamState.get(seed.a)!.gamesPlayed += 1;
+      teamState.get(seed.b)!.gamesPlayed += 1;
+      teamState.get(seed.a)!.lastPlayedWeek = weekNumber;
+      teamState.get(seed.b)!.lastPlayedWeek = weekNumber;
+      gamesThisWeek.set(seed.a, (gamesThisWeek.get(seed.a) || 0) + 1);
+      gamesThisWeek.set(seed.b, (gamesThisWeek.get(seed.b) || 0) + 1);
+      teamsInBucket.add(seed.a);
+      teamsInBucket.add(seed.b);
+      slotTeams.set(bucket, teamsInBucket);
+      usedSlots.add(bestSlotIdx);
+      lastBucketByTeam.set(seed.a, bucket);
+      lastBucketByTeam.set(seed.b, bucket);
     }
 
     // Iterate slots in time order (bucket by bucket, court by court within bucket).

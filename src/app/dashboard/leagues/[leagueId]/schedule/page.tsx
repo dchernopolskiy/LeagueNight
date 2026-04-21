@@ -138,6 +138,7 @@ export default function SchedulePage() {
       requestedEngine: "greedy" | "solver";
       engineUsed: "greedy" | "solver";
     };
+    warnings?: string[];
     generatedAt: string;
   };
   const generationStatsKey = `bw:genstats:${leagueId}`;
@@ -310,6 +311,7 @@ export default function SchedulePage() {
         droppedPairs: data.droppedPairs ?? [],
         preflight: data.preflight,
         scheduler: data.scheduler,
+        warnings: data.warnings ?? [],
         generatedAt: new Date().toISOString(),
       });
       await refetchLeague();
@@ -802,6 +804,18 @@ export default function SchedulePage() {
                   round-robin × {gs.preflight.matchupFrequency}, {gs.preflight.availableWeeks}{" "}
                   available.
                 </p>
+                {gs.warnings && gs.warnings.length > 0 && (
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-emerald-900/80 hover:text-emerald-900">
+                      Diagnostics & warnings ({gs.warnings.length})
+                    </summary>
+                    <ul className="mt-1 space-y-0.5 pl-4 list-disc">
+                      {gs.warnings.map((warning, i) => (
+                        <li key={i}>{warning}</li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
                 {gs.droppedPairs.length > 0 && (
                   <details className="text-xs">
                     <summary className="cursor-pointer text-emerald-900/80 hover:text-emerald-900">

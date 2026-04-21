@@ -137,6 +137,11 @@ export async function solveSchedule(params: FillParams): Promise<WeekFillResult>
         if (!existing.includes(hit.source)) existing.push(hit.source);
         applied[side] = existing;
       }
+      const schedulingNotes = buildSchedulingNotes(
+        teamsById,
+        [g.teamA, g.teamB],
+        scheduledAt
+      );
       games.push({
         home: g.teamA,
         away: g.teamB,
@@ -146,7 +151,7 @@ export async function solveSchedule(params: FillParams): Promise<WeekFillResult>
         weekNumber,
         preferenceApplied:
           Object.keys(applied).length > 0 ? applied : null,
-        schedulingNotes: null,
+        schedulingNotes,
       });
     }
   }
@@ -239,6 +244,21 @@ function buildWeekPreferences(
     }
   }
   return result;
+}
+
+function buildSchedulingNotes(
+  teamsById: Map<string, WeekFillTeam>,
+  teamIds: string[],
+  scheduledAt: Date
+): string | null {
+  const ymd = formatYMD(scheduledAt);
+  const notes: string[] = [];
+  for (const teamId of teamIds) {
+    const team = teamsById.get(teamId);
+    if (!team?.preferences?.bye_dates?.includes(ymd)) continue;
+    notes.push(`${team.name} has bye on this date`);
+  }
+  return notes.length > 0 ? notes.join("; ") : null;
 }
 
 // ── Local helpers (duplicated from week-fill.ts to avoid export churn) ──────
