@@ -1,13 +1,16 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getProfile } from "@/lib/supabase/helpers";
-import { generateRoundRobin, assignDatesWithPreferences } from "@/lib/scheduling/round-robin";
-import { localToUTCISO } from "@/lib/scheduling/date-utils";
+import { fillScheduleByWeek, schedulePreflight } from "@/lib/scheduling/week-fill";
+import { solveSchedule } from "@/lib/scheduling/solver";
+import { localToUTCISO, parseLocalDate } from "@/lib/scheduling/date-utils";
+import { computeReseedPools, type ReseedMode } from "@/lib/scheduling/reseed";
 import {
   assignGamesToLocationCourtSlots,
   findSameNightLocationSplits,
 } from "@/lib/scheduling/location-assignment";
 import {
   buildCourtSlots,
+  formatLocationSplitWarning,
   toAssignedGamesInsertRows,
   toScheduledGamesInsertRows,
   validateGenerateRequest,
@@ -31,6 +34,22 @@ export async function POST(request: NextRequest) {
     skipDates = [],
     regenerateFrom,
     locationIds = [],
+    acceptTruncation = false,
+    reseedMode,
+    engine = "solver",
+  }: {
+    leagueId: string;
+    patternId: string;
+    gamesPerTeam?: number;
+    gamesPerSession?: number;
+    matchupFrequency?: number;
+    mixDivisions?: boolean;
+    skipDates?: string[];
+    regenerateFrom?: string;
+    locationIds?: string[];
+    acceptTruncation?: boolean;
+    reseedMode?: ReseedMode;
+    engine?: "greedy" | "solver";
   } = body;
 
   const validationError = validateGenerateRequest({
@@ -39,38 +58,34 @@ export async function POST(request: NextRequest) {
     gamesPerTeam,
     gamesPerSession,
     matchupFrequency,
+    engine,
   });
   if (validationError) {
     return NextResponse.json({ error: validationError }, { status: 400 });
   }
 
   const supabase = createAdminClient();
-  const pairKey = (teamA: string, teamB: string) =>
-    [teamA, teamB].sort().join("-");
+  const pairKeyFn = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 
-  // Verify ownership or staff access
+  // Authorization
   const { data: league } = await supabase
     .from("leagues")
     .select("id")
     .eq("id", leagueId)
     .eq("organizer_id", profile.id)
     .single();
-
   if (!league) {
-    // Check if user is staff
     const { data: staffEntry } = await supabase
       .from("league_staff")
       .select("id")
       .eq("league_id", leagueId)
       .eq("profile_id", profile.id)
       .single();
-
     if (!staffEntry) {
       return NextResponse.json({ error: "League not found" }, { status: 404 });
     }
   }
 
-  // Get league metadata for authorization and timezone-safe timestamp conversion
   const { data: leagueInfo } = await supabase
     .from("leagues")
     .select("timezone, organizer_id")
@@ -78,49 +93,37 @@ export async function POST(request: NextRequest) {
     .single();
   const timezone = leagueInfo?.timezone || "America/New_York";
 
-  // Get teams with preferences
   const { data: teams } = await supabase
     .from("teams")
-    .select("id, division_id, name, preferences")
+    .select("id, name, division_id, preferences")
     .eq("league_id", leagueId);
-
   if (!teams || teams.length < 2) {
-    return NextResponse.json(
-      { error: "Need at least 2 teams" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "Need at least 2 teams" }, { status: 400 });
   }
 
-  // Get cross-division play rules
+  const { data: divisions } = await supabase
+    .from("divisions")
+    .select("id, name")
+    .eq("league_id", leagueId);
+
   const { data: crossPlayRules } = await supabase
     .from("division_cross_play")
     .select("*")
     .eq("league_id", leagueId);
 
-  // Get pattern
   const { data: pattern } = await supabase
     .from("game_day_patterns")
     .select("*")
     .eq("id", patternId)
     .eq("league_id", leagueId)
     .single();
-
   if (!pattern) {
-    return NextResponse.json(
-      { error: "Game day pattern not found" },
-      { status: 404 }
-    );
+    return NextResponse.json({ error: "Game day pattern not found" }, { status: 404 });
   }
 
-  // Resolve location IDs: use the ones from the request body, or fall back to pattern
   const effectiveLocationIds: string[] =
-    locationIds.length > 0
-      ? locationIds
-      : pattern.location_ids?.length > 0
-        ? pattern.location_ids
-        : [];
+    locationIds.length > 0 ? locationIds : pattern.location_ids || [];
 
-  // Fetch locations data for names
   let locationsData: { id: string; name: string; court_count: number }[] = [];
   if (effectiveLocationIds.length > 0) {
     const { data: locsData } = await supabase
@@ -138,242 +141,221 @@ export async function POST(request: NextRequest) {
   }
   const locationsMap = new Map(locationsData.map((l) => [l.id, l]));
 
-  // Fetch location unavailability for all relevant locations (with location_id for per-date filtering)
   const unavailByDate = new Map<string, Set<string>>();
   if (effectiveLocationIds.length > 0) {
     const { data: unavailData } = await supabase
       .from("location_unavailability")
       .select("location_id, unavailable_date")
       .in("location_id", effectiveLocationIds);
-    for (const u of (unavailData || [])) {
-      const dateSet = unavailByDate.get(u.unavailable_date) || new Set<string>();
-      dateSet.add(u.location_id);
-      unavailByDate.set(u.unavailable_date, dateSet);
+    for (const u of unavailData || []) {
+      const s = unavailByDate.get(u.unavailable_date) || new Set<string>();
+      s.add(u.location_id);
+      unavailByDate.set(u.unavailable_date, s);
     }
   }
-
-  // Only skip dates where ALL selected locations are unavailable
   const fullyUnavailDates: string[] = [];
-  for (const [date, unavailLocIds] of unavailByDate) {
-    if (effectiveLocationIds.every(id => unavailLocIds.has(id))) {
+  for (const [date, locs] of unavailByDate) {
+    if (effectiveLocationIds.every((id) => locs.has(id))) {
       fullyUnavailDates.push(date);
     }
   }
   const mergedSkipDates = Array.from(new Set([...skipDates, ...fullyUnavailDates]));
 
-  // Helper to parse local date strings (append T00:00:00 to force local-time parsing)
-  const parseLocalDate = (s: string) => new Date(s.includes("T") ? s : `${s}T00:00:00`);
-
-  // If regenerating, fetch games before the regeneration date to avoid duplicate matchups
+  // Existing matchups (for regeneration)
   const existingMatchupCounts = new Map<string, number>();
+  let regenerateFromDate: Date | null = null;
+  let unplayedBeforeRegenCount = 0;
   if (regenerateFrom) {
-    // Parse the regeneration date and convert to UTC ISO for comparison
-    const regenerationDate = localToUTCISO(parseLocalDate(regenerateFrom), timezone);
-
-    // Get all games (scheduled or completed) before the regeneration date
+    regenerateFromDate = parseLocalDate(regenerateFrom);
+    const regenerationIso = localToUTCISO(regenerateFromDate, timezone);
     const { data: existingGames } = await supabase
       .from("games")
-      .select("home_team_id, away_team_id")
+      .select("home_team_id, away_team_id, status")
       .eq("league_id", leagueId)
       .eq("is_playoff", false)
-      .lt("scheduled_at", regenerationDate);
-
+      .lt("scheduled_at", regenerationIso);
     if (existingGames) {
-      for (const game of existingGames) {
-        const key = pairKey(game.home_team_id, game.away_team_id);
-        existingMatchupCounts.set(key, (existingMatchupCounts.get(key) || 0) + 1);
+      for (const g of existingGames) {
+        const k = pairKeyFn(g.home_team_id, g.away_team_id);
+        existingMatchupCounts.set(k, (existingMatchupCounts.get(k) || 0) + 1);
+        if (g.status === "scheduled") unplayedBeforeRegenCount++;
       }
     }
   }
 
-  // Generate round-robin matchups
-  let allMatchups: ReturnType<typeof generateRoundRobin>;
-
-  if (mixDivisions) {
-    // Cross-division play with cross-play rules support
-    if (!crossPlayRules || crossPlayRules.length === 0) {
-      // No cross-play rules: one round-robin across all teams (old behavior)
-      const teamIds = teams.map((t) => t.id);
-      allMatchups = generateRoundRobin(teamIds, matchupFrequency);
-    } else {
-      // With cross-play rules: generate matchups respecting allowed division pairs
-      // First, group teams by division
-      const divisionTeams = new Map<string, string[]>();
-      for (const t of teams) {
-        const divKey = t.division_id ?? "__none__";
-        const arr = divisionTeams.get(divKey) || [];
-        arr.push(t.id);
-        divisionTeams.set(divKey, arr);
-      }
-
-      // Helper to check if two divisions can play together
-      const canDivisionsPlay = (divA: string | null, divB: string | null): boolean => {
-        if (!divA || !divB) return true; // Teams without divisions can play with anyone
-        if (divA === divB) return true; // Same division always plays together
-        const [smaller, larger] = divA < divB ? [divA, divB] : [divB, divA];
-        return crossPlayRules.some(
-          (rule) => rule.division_a_id === smaller && rule.division_b_id === larger
-        );
-      };
-
-      allMatchups = [];
-
-      // 1. Generate within-division matchups for each division
-      for (const [, teamIds] of divisionTeams) {
-        if (teamIds.length >= 2) {
-          allMatchups.push(...generateRoundRobin(teamIds, matchupFrequency));
-        }
-      }
-
-      // 2. Generate cross-division matchups based on rules, batching independent
-      // pairings into shared rounds instead of creating one round per game.
-      let maxExistingRound = allMatchups.reduce(
-        (max, matchup) => Math.max(max, matchup.round),
-        0
-      );
-      const divisionIds = Array.from(divisionTeams.keys());
-      for (let i = 0; i < divisionIds.length; i++) {
-        for (let j = i + 1; j < divisionIds.length; j++) {
-          const divA = divisionIds[i];
-          const divB = divisionIds[j];
-          if (canDivisionsPlay(divA === "__none__" ? null : divA, divB === "__none__" ? null : divB)) {
-            const teamsA = divisionTeams.get(divA) || [];
-            const teamsB = divisionTeams.get(divB) || [];
-            const roundSize = Math.max(teamsA.length, teamsB.length);
-            if (roundSize === 0) continue;
-
-            const paddedA = [...teamsA];
-            const paddedB = [...teamsB];
-            while (paddedA.length < roundSize) paddedA.push("BYE");
-            while (paddedB.length < roundSize) paddedB.push("BYE");
-
-            for (let freq = 0; freq < matchupFrequency; freq++) {
-              for (let round = 0; round < roundSize; round++) {
-                const roundNumber = maxExistingRound + (freq * roundSize) + round + 1;
-                for (let idx = 0; idx < roundSize; idx++) {
-                  const teamA = paddedA[idx];
-                  const teamB = paddedB[(idx + round) % roundSize];
-                  if (teamA === "BYE" || teamB === "BYE") continue;
-
-                  if (freq % 2 === 0) {
-                    allMatchups.push({ home: teamA, away: teamB, round: roundNumber });
-                  } else {
-                    allMatchups.push({ home: teamB, away: teamA, round: roundNumber });
-                  }
-                }
-              }
-              maxExistingRound += roundSize;
-            }
-          }
-        }
-      }
-    }
-  } else {
-    // Per-division: separate round-robins for each division group
-    const divisionGroups = new Map<string, string[]>();
-    for (const t of teams) {
-      const key = t.division_id ?? "__none__";
-      const arr = divisionGroups.get(key) || [];
-      arr.push(t.id);
-      divisionGroups.set(key, arr);
-    }
-    allMatchups = [];
-    for (const groupTeamIds of divisionGroups.values()) {
-      if (groupTeamIds.length >= 2) {
-        allMatchups.push(...generateRoundRobin(groupTeamIds, matchupFrequency));
-      }
-    }
-  }
-
-  if (allMatchups.length === 0) {
+  // Hard block: re-seed requires all games before regen date to be completed.
+  if (reseedMode && regenerateFrom && unplayedBeforeRegenCount > 0) {
     return NextResponse.json(
-      { error: "Not enough teams to generate matchups" },
-      { status: 400 }
+      {
+        error: "reseed_blocked_unplayed_games",
+        unplayedCount: unplayedBeforeRegenCount,
+        regenerateFrom,
+        message: `Cannot re-seed — ${unplayedBeforeRegenCount} scheduled game${unplayedBeforeRegenCount === 1 ? "" : "s"} before ${regenerateFrom} ${unplayedBeforeRegenCount === 1 ? "is" : "are"} not yet completed. Standings reflect only completed games, so re-seeding now would produce inaccurate pools. Complete those games (or reschedule them past the re-seed date), then try again.`,
+      },
+      { status: 409 }
     );
   }
 
-  // Filter out matchups that already happened before the regeneration date.
-  // Relies on Array.prototype.filter's in-order iteration guarantee: each
-  // already-played matchup decrements the remaining count by one, so duplicate
-  // pairings (double round-robin) are skipped proportionally.
-  let skippedExistingMatchups = 0;
-  if (regenerateFrom && existingMatchupCounts.size > 0) {
-    const filtered: typeof allMatchups = [];
-    for (const matchup of allMatchups) {
-      const matchupKey = pairKey(matchup.home, matchup.away);
-      const remaining = existingMatchupCounts.get(matchupKey) || 0;
-      if (remaining > 0) {
-        existingMatchupCounts.set(matchupKey, remaining - 1);
-        skippedExistingMatchups++;
-        continue;
-      }
-      filtered.push(matchup);
+  // Re-seed: remap teams into new pools based on standings.
+  let reseedTeamDivisionOverride: Map<string, string> | null = null;
+  let reseedCrossPlayOverride: Array<{ division_a_id: string; division_b_id: string }> | null = null;
+  let reseedTeamWeights: Map<string, number> | null = null;
+  if (reseedMode && regenerateFrom) {
+    const { data: standings } = await supabase
+      .from("standings")
+      .select("*")
+      .eq("league_id", leagueId);
+    const { data: leagueFull } = await supabase
+      .from("leagues")
+      .select("settings")
+      .eq("id", leagueId)
+      .single();
+
+    const reseed = computeReseedPools(
+      teams,
+      standings || [],
+      divisions || [],
+      leagueFull?.settings || {},
+      reseedMode
+    );
+
+    reseedTeamDivisionOverride = reseed.teamPool;
+    // No cross-play in re-seed mode: each team only plays others in same pool.
+    reseedCrossPlayOverride = [];
+    // Pass raw weights to the fill algorithm for skill-alignment scoring.
+    reseedTeamWeights = new Map();
+    for (const [tid, w] of reseed.teamWeights) {
+      reseedTeamWeights.set(tid, w.weight);
     }
-    allMatchups = filtered;
   }
 
-  // Assign dates — use total courts across all selected locations
-  const effectiveStartsOn = regenerateFrom ? parseLocalDate(regenerateFrom) : parseLocalDate(pattern.starts_on);
   const totalCourts = effectiveLocationIds.length > 0
-    ? locationsData.reduce((sum, l) => sum + l.court_count, 0)
+    ? locationsData.reduce((s, l) => s + l.court_count, 0)
     : (pattern.court_count || 1);
 
-  // Build teams map for preference-aware scheduling
-  const teamsMap = new Map();
-  if (teams) {
-    for (const team of teams) {
-      teamsMap.set(team.id, team);
-    }
-  }
-
-  const scheduled = assignDatesWithPreferences(
-    allMatchups,
-    {
-      dayOfWeek: pattern.day_of_week,
-      startTime: pattern.start_time,
-      endTime: pattern.end_time || null,
-      venue: null, // Don't use pattern venue - will be set per location below
-      courtCount: totalCourts,
-      startsOn: effectiveStartsOn,
-      durationMinutes: pattern.duration_minutes || 60,
-      skipDates: mergedSkipDates,
-    },
-    teamsMap,
-    gamesPerSession
+  // Build teamsMap for preference scoring
+  const teamsMap = new Map(
+    teams.map((t) => [t.id, { id: t.id, name: t.name, preferences: t.preferences }])
   );
 
-  // Check if we scheduled all matchups (capacity warning)
-  const schedulingWarnings: string[] = [];
+  const startsOn = regenerateFromDate ?? parseLocalDate(pattern.starts_on);
+  const endsOn = pattern.ends_on ? parseLocalDate(pattern.ends_on) : null;
 
-  // Add info about skipped matchups from before regeneration date
-  if (skippedExistingMatchups > 0) {
-    schedulingWarnings.push(
-      `Skipped ${skippedExistingMatchups} matchup${skippedExistingMatchups > 1 ? 's' : ''} that already occurred before the regeneration date.`
+  const patternObj = {
+    dayOfWeek: pattern.day_of_week,
+    startTime: pattern.start_time.slice(0, 5),
+    endTime: pattern.end_time ? pattern.end_time.slice(0, 5) : null,
+    venue: null,
+    courtCount: totalCourts,
+    startsOn,
+    endsOn,
+    durationMinutes: pattern.duration_minutes || 60,
+    skipDates: mergedSkipDates,
+  };
+
+  const weekFillTeams = teams.map((t) => ({
+    id: t.id,
+    name: t.name,
+    division_id: reseedTeamDivisionOverride?.get(t.id) ?? t.division_id,
+    preferences: t.preferences,
+  }));
+
+  const effectiveCrossPlayRules = reseedCrossPlayOverride ?? crossPlayRules ?? [];
+  const effectiveMixDivisions = reseedMode ? false : mixDivisions;
+
+  // Preflight check: if truncation needed but not accepted, return 409 with details.
+  const preflight = schedulePreflight(
+    weekFillTeams,
+    patternObj,
+    { matchupFrequency, gamesPerSession, gamesPerTeam },
+    divisions || []
+  );
+
+  if (!preflight.fits && !acceptTruncation) {
+    const divLabel = preflight.biggestDivisionName ?? "biggest";
+    const parts: string[] = [
+      `Division ${divLabel} needs ${preflight.minWeeksNeeded} weeks but only ${preflight.availableWeeks} weeks are available.`,
+    ];
+    if (preflight.droppedPairCount > 0) {
+      parts.push(
+        `${preflight.droppedPairCount} round-robin pairing${preflight.droppedPairCount === 1 ? "" : "s"} will be dropped.`
+      );
+    }
+    if (preflight.gamesPerTeamShortfall > 0) {
+      parts.push(
+        `Each team will play up to ${preflight.gamesPerTeamShortfall} fewer game${preflight.gamesPerTeamShortfall === 1 ? "" : "s"} than the goal of ${gamesPerTeam}.`
+      );
+    }
+    return NextResponse.json(
+      {
+        error: "truncation_required",
+        preflight,
+        message: parts.join(" "),
+      },
+      { status: 409 }
     );
   }
 
-  if (scheduled.length < allMatchups.length) {
-    const missedGames = allMatchups.length - scheduled.length;
-    schedulingWarnings.push(
-      `Unable to schedule ${missedGames} of ${allMatchups.length} games within the available time slots. ` +
-      `Consider: (1) Adding more courts, (2) Extending game day hours, (3) Adding more game days, or (4) Reducing matchup frequency.`
-    );
+  // Run the fill. `engine=solver` routes through the ILP path (Phase 1 + 2
+  // via HiGHS); default `greedy` is the legacy pass. Solver ignores reseed
+  // existingMatchupCounts and reseed team weights are passed into Phase 1 so
+  // regeneration avoids already-played matchups and keeps skill-aligned pools.
+  const fillParams = {
+    teams: weekFillTeams,
+    pattern: patternObj,
+    opts: {
+      matchupFrequency,
+      gamesPerSession,
+      allowCrossPlay: effectiveMixDivisions,
+      crossPlayRules: effectiveCrossPlayRules,
+      acceptTruncation,
+      gamesPerTeam,
+    },
+    teamsMap,
+    regenerateFromDate,
+    existingMatchupCounts,
+    teamWeights: reseedTeamWeights || undefined,
+  };
+  const requestedEngine: "greedy" | "solver" = engine === "solver" ? "solver" : "greedy";
+  let engineUsed: "greedy" | "solver" = requestedEngine;
+  const schedulerWarnings: string[] = [];
+  let result: Awaited<ReturnType<typeof fillScheduleByWeek>> | Awaited<ReturnType<typeof solveSchedule>>;
+  const courtSlots = buildCourtSlots(effectiveLocationIds, locationsMap);
+  if (requestedEngine === "solver") {
+    try {
+      result = await solveSchedule(fillParams, {
+        courtSlots,
+        unavailByDate,
+        teamDivisionIds: new Map(
+          weekFillTeams.map((team) => [team.id, team.division_id])
+        ),
+      });
+    } catch (err) {
+      engineUsed = "greedy";
+      schedulerWarnings.push(
+        `Solver failed before persistence (${formatSchedulerError(err)}); used greedy scheduler instead.`
+      );
+      result = fillScheduleByWeek(fillParams);
+    }
+  } else {
+    result = fillScheduleByWeek(fillParams);
   }
 
-  // Persist scheduling settings back to the pattern for self-contained regeneration
-  await supabase
-    .from("game_day_patterns")
-    .update({
-      games_per_team: gamesPerTeam,
-      games_per_session: gamesPerSession,
-      matchup_frequency: matchupFrequency,
-      mix_divisions: mixDivisions,
-      skip_dates: skipDates,
-      location_ids: effectiveLocationIds.length > 0 ? effectiveLocationIds : pattern.location_ids,
-    })
-    .eq("id", patternId);
+  // Persist scheduling settings back to the pattern
+  const patternUpdate: Record<string, unknown> = {
+    games_per_team: gamesPerTeam,
+    games_per_session: gamesPerSession,
+    matchup_frequency: matchupFrequency,
+    mix_divisions: mixDivisions,
+    skip_dates: skipDates,
+    location_ids: effectiveLocationIds.length > 0 ? effectiveLocationIds : pattern.location_ids,
+  };
+  if (reseedMode && regenerateFrom) {
+    patternUpdate.last_regenerated_at = localToUTCISO(parseLocalDate(regenerateFrom), timezone);
+  }
+  await supabase.from("game_day_patterns").update(patternUpdate).eq("id", patternId);
 
-  // Delete existing regular scheduled games (never touch playoff games)
+  // Delete existing scheduled games in the range we're regenerating.
   if (regenerateFrom) {
     await supabase
       .from("games")
@@ -391,35 +373,37 @@ export async function POST(request: NextRequest) {
       .eq("is_playoff", false);
   }
 
-  // Build a flat list of (locationId, courtNumber) slots for distribution
-  // e.g. if Reeves has 3 courts and MMS has 2 courts, slots = [Reeves-1, Reeves-2, Reeves-3, MMS-1, MMS-2]
-  const courtSlots = buildCourtSlots(effectiveLocationIds, locationsMap);
-
-  // Insert new games, assigning physical courts per date so teams stay at one
-  // location for the night whenever venue capacity makes that possible.
   const gamesToInsert = [];
+  let locationAssignmentDroppedCount = 0;
 
-  if (courtSlots.length > 0) {
-    const teamDivisionIds = new Map(teams.map((team) => [team.id, team.division_id]));
+  if (engineUsed === "solver" && "locationSplitCount" in result) {
+    locationAssignmentDroppedCount = result.locationAssignmentDroppedCount || 0;
+    if ((result.locationSplitCount || 0) > 0) {
+      schedulerWarnings.push(
+        formatLocationSplitWarning(result.locationSplitCount || 0)
+      );
+    }
+    gamesToInsert.push(
+      ...toScheduledGamesInsertRows({
+        leagueId,
+        timezone,
+        games: result.games,
+        defaultLocationId: pattern.location_ids?.[0] || null,
+      })
+    );
+  } else if (courtSlots.length > 0) {
+    const teamDivisionIds = new Map(weekFillTeams.map((team) => [team.id, team.division_id]));
     const assignedGames = assignGamesToLocationCourtSlots(
-      scheduled,
+      result.games,
       courtSlots,
       unavailByDate,
       teamDivisionIds
     );
-    const droppedByLocationAssignment = scheduled.length - assignedGames.length;
-    if (droppedByLocationAssignment > 0) {
-      schedulingWarnings.push(
-        `${droppedByLocationAssignment} game${droppedByLocationAssignment === 1 ? "" : "s"} could not be assigned to an available court without overbooking.`
-      );
-    }
+    locationAssignmentDroppedCount = result.games.length - assignedGames.length;
     const locationSplits = findSameNightLocationSplits(assignedGames);
     if (locationSplits.length > 0) {
-      schedulingWarnings.push(
-        `${locationSplits.length} team-night${locationSplits.length === 1 ? "" : "s"} had to be split across locations because no single venue had enough available courts.`
-      );
+      schedulerWarnings.push(formatLocationSplitWarning(locationSplits.length));
     }
-
     gamesToInsert.push(
       ...toAssignedGamesInsertRows({
         leagueId,
@@ -432,7 +416,7 @@ export async function POST(request: NextRequest) {
       ...toScheduledGamesInsertRows({
         leagueId,
         timezone,
-        games: scheduled,
+        games: result.games,
         defaultLocationId: pattern.location_ids?.[0] || null,
       })
     );
@@ -447,11 +431,40 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
+  const warnings: string[] = [...schedulerWarnings, ...result.notes];
+  if (result.droppedPairs.length > 0) {
+    warnings.push(
+      `${result.droppedPairs.length} pairing${result.droppedPairs.length > 1 ? "s" : ""} could not be scheduled within the available weeks.`
+    );
+  }
+  if (locationAssignmentDroppedCount > 0) {
+    warnings.push(
+      `${locationAssignmentDroppedCount} game${locationAssignmentDroppedCount === 1 ? "" : "s"} could not be assigned to an available court without overbooking.`
+    );
+  }
+  const backToBackByes = result.byes.filter((b) => b.backToBack);
+  if (backToBackByes.length > 0) {
+    warnings.push(
+      `${backToBackByes.length} back-to-back BYE${backToBackByes.length > 1 ? "s were" : " was"} unavoidable.`
+    );
+  }
+
   return NextResponse.json({
     games: insertedGames,
     count: insertedGames?.length || 0,
-    warnings: schedulingWarnings.length > 0 ? schedulingWarnings : undefined,
-    totalMatchups: allMatchups.length,
-    scheduledGames: gamesToInsert.length,
+    warnings: warnings.length > 0 ? warnings : undefined,
+    preflight,
+    byes: result.byes,
+    droppedPairs: result.droppedPairs,
+    targetWeeks: result.targetWeeks,
+    scheduler: {
+      requestedEngine,
+      engineUsed,
+    },
   });
+}
+
+function formatSchedulerError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
 }

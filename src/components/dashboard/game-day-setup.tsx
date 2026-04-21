@@ -160,7 +160,7 @@ export function GameDaySetupPanel({
   const [showForm, setShowForm] = useState(patterns.length === 0);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm());
-  const [schedulerEngine, setSchedulerEngine] = useState<SchedulerEngine>("greedy");
+  const [schedulerEngine, setSchedulerEngine] = useState<SchedulerEngine>("solver");
   const [saving, setSaving] = useState(false);
 
   // Inline "Add location" state

@@ -72,7 +72,7 @@ function Stat({ label, value, warn }: { label: string; value: string | number; w
 function formatSchedulerLabel(
   scheduler?: { requestedEngine: "greedy" | "solver"; engineUsed: "greedy" | "solver" }
 ): string {
-  if (!scheduler) return "Greedy";
+  if (!scheduler) return "Solver";
   const used = scheduler.engineUsed === "solver" ? "Solver" : "Greedy";
   if (scheduler.requestedEngine === scheduler.engineUsed) return used;
   const requested = scheduler.requestedEngine === "solver" ? "Solver" : "Greedy";
@@ -256,7 +256,7 @@ export default function SchedulePage() {
   ) {
     setGenerating(true);
     setReseedBlock(null);
-    const res = await fetch("/api/schedule/generate-v2", {
+    const res = await fetch("/api/schedule/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
