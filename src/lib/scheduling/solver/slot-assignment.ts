@@ -290,21 +290,33 @@ export async function solveSlotAssignment(
 ): Promise<SlotAssignmentResult> {
   const { lp, meta, stats } = buildSlotAssignmentLP(input);
   const highs = await loadHighs();
+  const memBefore = process.memoryUsage();
+  const tStart = Date.now();
   let result: HighsResult;
   try {
     result = highs.solve(lp);
   } catch (err) {
+    const memAtFail = process.memoryUsage();
     const details = [
       `games=${input.games.length}`,
       `buckets=${input.buckets}`,
       `slots=${stats.slotCount}`,
       `binaryVars=${stats.binaryCount}`,
       `lpBytes=${Buffer.byteLength(lp, "utf8")}`,
+      `rssBeforeMB=${(memBefore.rss / 1024 / 1024).toFixed(1)}`,
+      `rssAtFailMB=${(memAtFail.rss / 1024 / 1024).toFixed(1)}`,
+      `heapUsedBeforeMB=${(memBefore.heapUsed / 1024 / 1024).toFixed(1)}`,
+      `heapUsedAtFailMB=${(memAtFail.heapUsed / 1024 / 1024).toFixed(1)}`,
+      `elapsedMs=${Date.now() - tStart}`,
     ].join(", ");
     throw new Error(
       `Slot assignment solver crashed (${details}): ${err instanceof Error ? err.message : String(err)}`
     );
   }
+  const memAfter = process.memoryUsage();
+  console.log(
+    `[slot-assignment] solved games=${input.games.length} buckets=${input.buckets} slots=${stats.slotCount} binaryVars=${stats.binaryCount} lpBytes=${Buffer.byteLength(lp, "utf8")} rssBeforeMB=${(memBefore.rss / 1024 / 1024).toFixed(1)} rssAfterMB=${(memAfter.rss / 1024 / 1024).toFixed(1)} heapUsedAfterMB=${(memAfter.heapUsed / 1024 / 1024).toFixed(1)} elapsedMs=${Date.now() - tStart}`
+  );
 
   const notes: string[] = [];
   if (result.Status !== "Optimal") {
