@@ -160,6 +160,63 @@ describe("Phase 1: matchup-to-week ILP", () => {
     }
   }, 30_000);
 
+  it("avoids scheduling a team in its forbidden week when capacity allows", async () => {
+    // 4 teams, 3 weeks × 2 courts = 6 slots = full round-robin.
+    // Team A is forbidden from playing week 2. With 6 pairs and 3 weeks,
+    // the solver has to schedule A in 3 of those weeks (A plays 3 games);
+    // the calendar allows this without touching week 2. Expect 0 games for A
+    // in week 2.
+    const teams = Array.from({ length: 4 }, (_, i) => ({
+      id: `T${i + 1}`,
+      name: `Team ${i + 1}`,
+      division_id: "d1",
+    }));
+    const pattern = {
+      dayOfWeek: 1,
+      startTime: "18:00",
+      endTime: "22:00",
+      venue: null,
+      courtCount: 2,
+      startsOn: new Date("2026-01-05"),
+      endsOn: new Date("2026-02-02"),
+      durationMinutes: 60,
+      skipDates: [],
+    };
+    const opts = {
+      matchupFrequency: 1,
+      gamesPerSession: 1,
+      allowCrossPlay: false,
+      gamesPerTeam: 3,
+    };
+    // Note: with 4 teams × 3 weeks × 2 courts, each team MUST play every
+    // week (A plays 3 games in 3 weeks). So we use a looser setup: 6 weeks,
+    // gamesPerTeam=3, giving slack to skip week 2 for team A.
+    const loose = {
+      ...pattern,
+      endsOn: new Date("2026-02-16"),
+    };
+    const input = buildPhase1InputFromWeekFill(
+      teams,
+      loose,
+      opts,
+      6,
+      2,
+      {
+        forbiddenWeeksByTeam: new Map([["T1", new Set([2])]]),
+      }
+    );
+    const result = await solvePhase1(input);
+    expect(result.status).toBe("Optimal");
+
+    let t1PlaysWeek2 = 0;
+    for (const a of result.assignments) {
+      if (a.week !== 2) continue;
+      const [tA, tB] = a.pairKey.split("|");
+      if (tA === "T1" || tB === "T1") t1PlaysWeek2++;
+    }
+    expect(t1PlaysWeek2).toBe(0);
+  }, 15_000);
+
   it("LP builder produces valid CPLEX LP format", () => {
     const teams = [
       { id: "a", name: "A", division_id: "d1" },

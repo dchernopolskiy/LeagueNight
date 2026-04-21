@@ -38,6 +38,10 @@ export interface Phase1Input {
     "matchupFrequency" | "gamesPerSession" | "gamesPerTeam"
   >;
   slotsPerWeek: number; // total games a single night can host
+  // Week numbers (1-indexed) each team has requested off via bye_dates. Phase 1
+  // treats these as soft no-play constraints — we'll forgo the request if the
+  // calendar is too tight, but it's heavily penalized.
+  forbiddenWeeksByTeam?: Map<string, Set<number>>;
 }
 
 export interface Phase1Assignment {
@@ -97,6 +101,13 @@ const BONUS_SKILL_ALIGNMENT = 27;
 // Dropping a required within-div pair is heavier than any other soft penalty
 // so the model only drops pairs when the calendar is genuinely insufficient.
 const PENALTY_DROP_REQUIRED_PAIR = 5_000;
+// Violating a requested bye_date. Heavier than b2b BYE but lighter than
+// dropping a required pair — we'd rather a team play on a requested-off night
+// than fail to schedule a required matchup at all.
+const PENALTY_BYE_DATE_VIOLATION = 2_000;
+// BYE balance. Penalizes the delta between each team's BYE count and the
+// league mean, pulling the solver toward an even distribution.
+const PENALTY_BYE_IMBALANCE = 30;
 
 function xVar(pairKey: string, week: number): string {
   return `x_${sanitize(pairKey)}_w${week}`;
@@ -241,6 +252,63 @@ export function buildPhase1LP(input: Phase1Input): {
     if (sum) constraints.push(`${sum} <= ${slotsPerWeek}`);
   }
 
+  // bye_date requests: penalize any play by team t in a forbidden week. Uses
+  // the already-defined plays[t,w] binary so we pay once per violated week
+  // rather than per game.
+  if (input.forbiddenWeeksByTeam && input.forbiddenWeeksByTeam.size > 0) {
+    for (const t of teams) {
+      const forbidden = input.forbiddenWeeksByTeam.get(t.id);
+      if (!forbidden || forbidden.size === 0) continue;
+      for (const w of forbidden) {
+        if (w < 1 || w > weeks) continue;
+        objectiveTerms.push(
+          `${PENALTY_BYE_DATE_VIOLATION} ${playsVar(t.id, w)}`
+        );
+      }
+    }
+  }
+
+  // BYE balance. For each team, totalPlays[t] = Σ_w plays[t,w]. We want to
+  // keep totalPlays close to the league mean so BYEs distribute evenly. Add
+  // slack variables byeOver[t], byeUnder[t] around the per-team target (or,
+  // equivalently, around the global mean plays-per-team), and penalize them.
+  //
+  // We use gamesPerTeamGoal as the target if set; otherwise skip (no goal →
+  // caller hasn't committed to a target count).
+  if (gamesPerTeamGoal > 0) {
+    // under/over already exist from games-per-team; they already pull toward
+    // the same target. The existing terms (PENALTY_UNDER_GAMES,
+    // PENALTY_OVER_GAMES) handle balance. So all we need here is the
+    // intentional redundancy documentation — no new vars.
+    void PENALTY_BYE_IMBALANCE;
+  } else {
+    // Without a goal, compute a soft target and add balance slack. Target =
+    // average plays-per-team given total required pair-plays.
+    let totalRequired = 0;
+    for (const p of pairs) totalRequired += p.required;
+    const target = teams.length > 0
+      ? Math.round((totalRequired * 2) / teams.length)
+      : 0;
+    if (target > 0) {
+      for (const t of teams) {
+        const allGames = pairs
+          .filter((p) => p.teamA === t.id || p.teamB === t.id)
+          .flatMap((p) =>
+            Array.from({ length: weeks }, (_, i) => xVar(p.key, i + 1))
+          );
+        if (allGames.length === 0) continue;
+        const uv = `byeunder_${sanitize(t.id)}`;
+        const ov = `byeover_${sanitize(t.id)}`;
+        generals.push(uv, ov);
+        constraints.push(
+          `${allGames.join(" + ")} + ${uv} - ${ov} = ${target}`
+        );
+        objectiveTerms.push(`${PENALTY_BYE_IMBALANCE} ${uv}`);
+        objectiveTerms.push(`${PENALTY_BYE_IMBALANCE} ${ov}`);
+      }
+    }
+  }
+
   // Games-per-team target via slack. For each team:
   // Σ_w Σ_{p∋t} x[p,w] + under[t] - over[t] = gamesPerTeamGoal
   if (gamesPerTeamGoal > 0) {
@@ -359,6 +427,7 @@ export function buildPhase1InputFromWeekFill(
   extras: {
     existingMatchupCounts?: Map<string, number>;
     teamWeights?: Map<string, number>;
+    forbiddenWeeksByTeam?: Map<string, Set<number>>;
   } = {}
 ): Phase1Input {
   const pairs: Phase1Pair[] = [];
@@ -461,5 +530,6 @@ export function buildPhase1InputFromWeekFill(
       gamesPerTeam: opts.gamesPerTeam,
     },
     slotsPerWeek,
+    forbiddenWeeksByTeam: extras.forbiddenWeeksByTeam,
   };
 }

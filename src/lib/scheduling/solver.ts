@@ -48,6 +48,8 @@ export async function solveSchedule(params: FillParams): Promise<WeekFillResult>
   const slotsPerDay = timeSlotsPerDayLocal(pattern);
   const slotsPerWeek = slotsPerDay * pattern.courtCount;
 
+  const forbiddenWeeksByTeam = buildForbiddenWeeks(teams, gameDays);
+
   // ── Phase 1: pair → week ──────────────────────────────────────────────────
   const phase1Input = buildPhase1InputFromWeekFill(
     teams,
@@ -58,6 +60,7 @@ export async function solveSchedule(params: FillParams): Promise<WeekFillResult>
     {
       existingMatchupCounts: params.existingMatchupCounts,
       teamWeights: params.teamWeights,
+      forbiddenWeeksByTeam,
     }
   );
   const phase1 = await solvePhase1(phase1Input);
@@ -176,6 +179,32 @@ export async function solveSchedule(params: FillParams): Promise<WeekFillResult>
     targetWeeks,
     availableWeeks,
   };
+}
+
+// Maps each team's `bye_dates` (YYYY-MM-DD strings) onto 1-indexed week
+// numbers in the scheduled calendar. Dates outside the schedule range are
+// silently dropped — the solver only cares about forbidden weeks inside the
+// window.
+function buildForbiddenWeeks(
+  teams: WeekFillTeam[],
+  gameDays: Date[]
+): Map<string, Set<number>> {
+  const weekByDate = new Map<string, number>();
+  for (let i = 0; i < gameDays.length; i++) {
+    weekByDate.set(formatYMD(gameDays[i]), i + 1);
+  }
+  const result = new Map<string, Set<number>>();
+  for (const t of teams) {
+    const byes = t.preferences?.bye_dates;
+    if (!byes || byes.length === 0) continue;
+    const forbidden = new Set<number>();
+    for (const d of byes) {
+      const w = weekByDate.get(d);
+      if (w) forbidden.add(w);
+    }
+    if (forbidden.size > 0) result.set(t.id, forbidden);
+  }
+  return result;
 }
 
 // Builds per-week preference entries for the teams playing this week.
