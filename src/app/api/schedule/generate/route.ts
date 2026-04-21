@@ -6,6 +6,12 @@ import {
   assignGamesToLocationCourtSlots,
   findSameNightLocationSplits,
 } from "@/lib/scheduling/location-assignment";
+import {
+  buildCourtSlots,
+  toAssignedGamesInsertRows,
+  toScheduledGamesInsertRows,
+  validateGenerateRequest,
+} from "../_shared";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
@@ -387,33 +393,11 @@ export async function POST(request: NextRequest) {
 
   // Build a flat list of (locationId, courtNumber) slots for distribution
   // e.g. if Reeves has 3 courts and MMS has 2 courts, slots = [Reeves-1, Reeves-2, Reeves-3, MMS-1, MMS-2]
-  const courtSlots: { locationId: string; courtNum: number; locationName: string; totalCourts: number }[] = [];
-  if (effectiveLocationIds.length > 0) {
-    for (const locId of effectiveLocationIds) {
-      const loc = locationsMap.get(locId);
-      if (loc) {
-        for (let c = 1; c <= loc.court_count; c++) {
-          courtSlots.push({ locationId: locId, courtNum: c, locationName: loc.name, totalCourts: loc.court_count });
-        }
-      }
-    }
-  }
+  const courtSlots = buildCourtSlots(effectiveLocationIds, locationsMap);
 
   // Insert new games, assigning physical courts per date so teams stay at one
   // location for the night whenever venue capacity makes that possible.
-  const gamesToInsert: Array<{
-    league_id: string;
-    home_team_id: string;
-    away_team_id: string;
-    scheduled_at: string;
-    venue: string | null;
-    court: string | null;
-    week_number: number;
-    status: "scheduled";
-    location_id: string | null;
-    preference_applied: unknown;
-    scheduling_notes: string | null;
-  }> = [];
+  const gamesToInsert = [];
 
   if (courtSlots.length > 0) {
     const teamDivisionIds = new Map(teams.map((team) => [team.id, team.division_id]));
@@ -436,38 +420,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    for (const g of assignedGames) {
-      gamesToInsert.push({
-        league_id: leagueId,
-        home_team_id: g.home,
-        away_team_id: g.away,
-        scheduled_at: localToUTCISO(g.scheduledAt, timezone),
-        venue: g.locationName,
-        court: g.totalCourts > 1 ? `Court ${g.courtNum}` : null,
-        week_number: g.weekNumber,
-        status: "scheduled",
-        location_id: g.locationId,
-        preference_applied: g.preferenceApplied || null,
-        scheduling_notes: g.schedulingNotes || null,
-      });
-    }
+    gamesToInsert.push(
+      ...toAssignedGamesInsertRows({
+        leagueId,
+        timezone,
+        games: assignedGames,
+      })
+    );
   } else {
-    // No locations selected — use pattern defaults
-    for (const g of scheduled) {
-      gamesToInsert.push({
-        league_id: leagueId,
-        home_team_id: g.home,
-        away_team_id: g.away,
-        scheduled_at: localToUTCISO(g.scheduledAt, timezone),
-        venue: g.venue,
-        court: g.court,
-        week_number: g.weekNumber,
-        status: "scheduled",
-        location_id: pattern.location_ids?.[0] || null,
-        preference_applied: g.preferenceApplied || null,
-        scheduling_notes: g.schedulingNotes || null,
-      });
-    }
+    gamesToInsert.push(
+      ...toScheduledGamesInsertRows({
+        leagueId,
+        timezone,
+        games: scheduled,
+        defaultLocationId: pattern.location_ids?.[0] || null,
+      })
+    );
   }
 
   const { data: insertedGames, error } = await supabase
@@ -486,33 +454,4 @@ export async function POST(request: NextRequest) {
     totalMatchups: allMatchups.length,
     scheduledGames: gamesToInsert.length,
   });
-}
-
-function validateGenerateRequest(input: {
-  leagueId: unknown;
-  patternId: unknown;
-  gamesPerTeam: unknown;
-  gamesPerSession: unknown;
-  matchupFrequency: unknown;
-}): string | null {
-  if (typeof input.leagueId !== "string" || input.leagueId.length === 0) {
-    return "leagueId is required";
-  }
-  if (typeof input.patternId !== "string" || input.patternId.length === 0) {
-    return "patternId is required";
-  }
-  if (!isPositiveInteger(input.gamesPerTeam)) {
-    return "gamesPerTeam must be a positive integer";
-  }
-  if (!isPositiveInteger(input.gamesPerSession)) {
-    return "gamesPerSession must be a positive integer";
-  }
-  if (!isPositiveInteger(input.matchupFrequency)) {
-    return "matchupFrequency must be a positive integer";
-  }
-  return null;
-}
-
-function isPositiveInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0;
 }

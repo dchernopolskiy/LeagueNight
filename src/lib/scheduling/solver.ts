@@ -8,6 +8,12 @@ import type {
 import { schedulePreflight } from "./week-fill";
 import { formatYMD } from "./date-utils";
 import {
+  assignGamesToLocationCourtSlots,
+  findSameNightLocationSplits,
+  type LocationAssignedGame,
+  type LocationCourtSlot,
+} from "./location-assignment";
+import {
   buildPhase1InputFromWeekFill,
   solvePhase1,
   type Phase1Assignment,
@@ -19,6 +25,18 @@ import {
 } from "./solver/phase2";
 import type { PreferenceApplied } from "@/lib/types";
 
+export interface SolveScheduleLocationOptions {
+  courtSlots: LocationCourtSlot[];
+  unavailByDate: Map<string, Set<string>>;
+  teamDivisionIds?: Map<string, string | null>;
+}
+
+export interface SolveScheduleResult extends WeekFillResult {
+  assignedGames?: LocationAssignedGame[];
+  locationAssignmentDroppedCount?: number;
+  locationSplitCount?: number;
+}
+
 /**
  * Two-phase ILP scheduler. Phase 1 assigns pairs to weeks (HiGHS MIP),
  * Phase 2 assigns each week's games to (bucket, court). Multi-venue
@@ -26,7 +44,10 @@ import type { PreferenceApplied } from "@/lib/types";
  * emits games with `venue: pattern.venue` (single-venue default), matching
  * the legacy greedy output shape.
  */
-export async function solveSchedule(params: FillParams): Promise<WeekFillResult> {
+export async function solveSchedule(
+  params: FillParams,
+  locationOptions?: SolveScheduleLocationOptions
+): Promise<SolveScheduleResult> {
   const { teams, pattern, opts } = params;
 
   const preflight = schedulePreflight(teams, pattern, {
@@ -171,6 +192,20 @@ export async function solveSchedule(params: FillParams): Promise<WeekFillResult>
     `Solver: scheduled ${games.length} game${games.length === 1 ? "" : "s"} across ${targetWeeks} target week${targetWeeks === 1 ? "" : "s"}`
   );
 
+  let assignedGames: LocationAssignedGame[] | undefined;
+  let locationAssignmentDroppedCount = 0;
+  let locationSplitCount = 0;
+  if (locationOptions && locationOptions.courtSlots.length > 0) {
+    assignedGames = assignGamesToLocationCourtSlots(
+      games,
+      locationOptions.courtSlots,
+      locationOptions.unavailByDate,
+      locationOptions.teamDivisionIds || new Map()
+    );
+    locationAssignmentDroppedCount = games.length - assignedGames.length;
+    locationSplitCount = findSameNightLocationSplits(assignedGames).length;
+  }
+
   return {
     games,
     byes,
@@ -185,6 +220,9 @@ export async function solveSchedule(params: FillParams): Promise<WeekFillResult>
     })),
     targetWeeks,
     availableWeeks,
+    assignedGames,
+    locationAssignmentDroppedCount,
+    locationSplitCount,
   };
 }
 
