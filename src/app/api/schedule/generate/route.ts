@@ -468,6 +468,19 @@ export async function POST(request: NextRequest) {
 }
 
 function formatSchedulerError(err: unknown): string {
-  if (err instanceof Error) return err.message;
+  if (err instanceof Error) {
+    const parts = [err.message];
+    const cause = (err as Error & { cause?: unknown }).cause;
+    if (cause instanceof Error) {
+      parts.push(`cause=${cause.message}`);
+    } else if (cause) {
+      parts.push(`cause=${String(cause)}`);
+    }
+    const stackLine = err.stack?.split("\n").map((line) => line.trim())[1];
+    if (stackLine) {
+      parts.push(stackLine);
+    }
+    return parts.join(" | ");
+  }
   return String(err);
 }

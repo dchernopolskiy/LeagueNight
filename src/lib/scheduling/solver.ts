@@ -78,7 +78,23 @@ export async function solveSchedule(
       forbiddenWeeksByTeam,
     }
   );
-  const matchupSelection = await solveMatchupSelection(matchupSelectionInput);
+  let matchupSelection;
+  try {
+    matchupSelection = await solveMatchupSelection(matchupSelectionInput);
+  } catch (err) {
+    throw new Error(
+      [
+        "Matchup selection failed",
+        `teams=${teams.length}`,
+        `pairs=${matchupSelectionInput.pairs.length}`,
+        `weeks=${targetWeeks}`,
+        `slotsPerWeek=${slotsPerWeek}`,
+        `crossDivPairs=${matchupSelectionInput.pairs.filter((pair) => pair.crossDiv).length}`,
+        `requiredPairPlays=${matchupSelectionInput.pairs.reduce((sum, pair) => sum + pair.required, 0)}`,
+        `detail=${describeError(err)}`,
+      ].join("; ")
+    );
+  }
   if (matchupSelection.status !== "Optimal") {
     throw new Error(
       `Matchup selection solver returned status=${matchupSelection.status}`
@@ -134,13 +150,29 @@ export async function solveSchedule(
         )
       : undefined;
 
-    const slotAssignment = await solveSlotAssignment({
-      games: scheduledWeekGames,
-      buckets: slotsPerDay,
-      courtsPerBucket: pattern.courtCount,
-      courtSlots: weekCourtSlots,
-      teamPreferences,
-    });
+    let slotAssignment;
+    try {
+      slotAssignment = await solveSlotAssignment({
+        games: scheduledWeekGames,
+        buckets: slotsPerDay,
+        courtsPerBucket: pattern.courtCount,
+        courtSlots: weekCourtSlots,
+        teamPreferences,
+      });
+    } catch (err) {
+      throw new Error(
+        [
+          "Slot assignment failed",
+          `week=${weekNumber}`,
+          `games=${scheduledWeekGames.length}`,
+          `buckets=${slotsPerDay}`,
+          `courtCount=${pattern.courtCount}`,
+          `courtSlots=${weekCourtSlots?.length ?? pattern.courtCount}`,
+          `teamPreferences=${teamPreferences.length}`,
+          `detail=${describeError(err)}`,
+        ].join("; ")
+      );
+    }
     if (slotAssignment.status !== "Optimal") {
       throw new Error(
         `Slot assignment solver returned status=${slotAssignment.status} for week ${weekNumber}`
@@ -223,6 +255,26 @@ export async function solveSchedule(
     locationAssignmentDroppedCount,
     locationSplitCount,
   };
+}
+
+function describeError(err: unknown): string {
+  if (err instanceof Error) {
+    const parts = [err.name, err.message].filter(Boolean);
+    const cause = (err as Error & { cause?: unknown }).cause;
+    if (cause) {
+      parts.push(`cause=${describeError(cause)}`);
+    }
+    const stackLine = err.stack?.split("\n").map((line) => line.trim())[1];
+    if (stackLine) {
+      parts.push(`at=${stackLine}`);
+    }
+    return parts.join(" | ");
+  }
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
 }
 
 // Maps each team's `bye_dates` (YYYY-MM-DD strings) onto 1-indexed week
