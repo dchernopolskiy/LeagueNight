@@ -205,6 +205,8 @@ function pairKey(a: string, b: string): string {
   return a < b ? `${a}|${b}` : `${b}|${a}`;
 }
 
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
 interface PairInfo {
   teamA: string;
   teamB: string;
@@ -457,10 +459,22 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
     ]) {
       if (!team?.preferences) continue;
       const pref = team.preferences;
+      const slotDayName = DAY_NAMES[slotTimeDate.getDay()];
       if (pref.bye_dates?.includes(slotYMD)) {
         score -= BYE_PREF_PENALTY;
         notes.push(`${team.name} has bye on this date`);
         continue;
+      }
+      if (pref.preferred_days?.length) {
+        if (pref.preferred_days.includes(slotDayName)) {
+          applied[side] = applied[side] || [];
+          if (!applied[side]!.includes("preferred_day")) {
+            applied[side]!.push("preferred_day");
+          }
+          score += 10;
+        } else {
+          score -= 5;
+        }
       }
       const weekPref = pref.week_preferences?.[week];
       if (weekPref) {

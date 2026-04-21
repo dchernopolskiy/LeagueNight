@@ -137,6 +137,8 @@ export async function solveSchedule(params: FillParams): Promise<WeekFillResult>
         if (!existing.includes(hit.source)) existing.push(hit.source);
         applied[side] = existing;
       }
+      applyPreferredDayHit(applied, teamsById.get(g.teamA), "home_team", scheduledAt);
+      applyPreferredDayHit(applied, teamsById.get(g.teamB), "away_team", scheduledAt);
       const schedulingNotes = buildSchedulingNotes(
         teamsById,
         [g.teamA, g.teamB],
@@ -260,6 +262,25 @@ function buildSchedulingNotes(
   }
   return notes.length > 0 ? notes.join("; ") : null;
 }
+
+function applyPreferredDayHit(
+  applied: PreferenceApplied,
+  team: WeekFillTeam | undefined,
+  side: "home_team" | "away_team",
+  scheduledAt: Date
+) {
+  const preferredDays = team?.preferences?.preferred_days;
+  if (!preferredDays?.length) return;
+  const dayName = DAY_NAMES[scheduledAt.getDay()];
+  if (!preferredDays.includes(dayName)) return;
+  const existing = applied[side] || [];
+  if (!existing.includes("preferred_day")) {
+    existing.push("preferred_day");
+    applied[side] = existing;
+  }
+}
+
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 // ── Local helpers (duplicated from week-fill.ts to avoid export churn) ──────
 

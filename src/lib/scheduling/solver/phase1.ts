@@ -27,6 +27,7 @@ export interface Phase1Pair {
   required: number; // matchupFrequency for within-div; 0 for crossplay
   priorPlayed: number;
   skillAlignment?: number; // 0..1, only present in re-seed mode
+  dayPreferenceScore?: number;
 }
 
 export interface Phase1Input {
@@ -165,6 +166,9 @@ export function buildPhase1LP(input: Phase1Input): {
       }
       if (p.skillAlignment !== undefined) {
         objectiveTerms.push(`${(-BONUS_SKILL_ALIGNMENT * p.skillAlignment).toFixed(3)} ${v}`);
+      }
+      if (p.dayPreferenceScore) {
+        objectiveTerms.push(`${(-p.dayPreferenceScore).toFixed(3)} ${v}`);
       }
     }
   }
@@ -432,18 +436,27 @@ export function buildPhase1InputFromWeekFill(
 ): Phase1Input {
   const pairs: Phase1Pair[] = [];
   const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+  const dayName = DAY_NAMES[pattern.dayOfWeek] || null;
   const pairMeta = (a: string, b: string, required: number) => {
     const key = pairKey(a, b);
     const priorPlayed = extras.existingMatchupCounts?.get(key) ?? 0;
     const wA = extras.teamWeights?.get(a);
     const wB = extras.teamWeights?.get(b);
+    const teamA = teams.find((t) => t.id === a);
+    const teamB = teams.find((t) => t.id === b);
     const skillAlignment =
       wA !== undefined && wB !== undefined ? 1 - Math.abs(wA - wB) : undefined;
+    const preferredDayScore = [teamA, teamB].reduce((score, team) => {
+      const preferredDays = team?.preferences?.preferred_days;
+      if (!dayName || !preferredDays || preferredDays.length === 0) return score;
+      return score + (preferredDays.includes(dayName) ? 10 : -5);
+    }, 0);
     return {
       key,
       priorPlayed,
       required: Math.max(0, required - priorPlayed),
       skillAlignment,
+      dayPreferenceScore: preferredDayScore || undefined,
     };
   };
 
@@ -472,6 +485,7 @@ export function buildPhase1InputFromWeekFill(
           required: meta.required,
           priorPlayed: meta.priorPlayed,
           skillAlignment: meta.skillAlignment,
+          dayPreferenceScore: meta.dayPreferenceScore,
         });
       }
     }
@@ -511,6 +525,7 @@ export function buildPhase1InputFromWeekFill(
               required: 0,
               priorPlayed: meta.priorPlayed,
               skillAlignment: meta.skillAlignment,
+              dayPreferenceScore: meta.dayPreferenceScore,
             });
           }
         }
@@ -533,3 +548,5 @@ export function buildPhase1InputFromWeekFill(
     forbiddenWeeksByTeam: extras.forbiddenWeeksByTeam,
   };
 }
+
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];

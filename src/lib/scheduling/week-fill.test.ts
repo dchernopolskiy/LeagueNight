@@ -438,4 +438,44 @@ perEngine("scheduler: preference parity", (mode) => {
     }, 0);
     expect(totalHits).toBe(4);
   });
+
+  it("applies preferred_day when the schedule day matches", async () => {
+    const teams = [
+      { id: "m1", name: "M1", division_id: "A", preferences: { preferred_days: ["Monday"] } },
+      { id: "m2", name: "M2", division_id: "A", preferences: { preferred_days: ["Monday"] } },
+      { id: "t1", name: "T1", division_id: "B", preferences: { preferred_days: ["Tuesday"] } },
+      { id: "t2", name: "T2", division_id: "B", preferences: { preferred_days: ["Tuesday"] } },
+    ];
+    const pattern = defaultPattern({
+      courtCount: 1,
+      startsOn: new Date("2026-01-05"),
+      endsOn: new Date("2026-01-12"),
+    });
+    const teamsMap = new Map(
+      teams.map((t) => [
+        t.id,
+        { id: t.id, name: t.name, preferences: t.preferences },
+      ])
+    );
+
+    const result = await runScheduler(mode, {
+      teams,
+      pattern,
+      opts: {
+        matchupFrequency: 1,
+        gamesPerSession: 1,
+        allowCrossPlay: false,
+        gamesPerTeam: 1,
+      },
+      teamsMap,
+    });
+
+    expect(result.games).toHaveLength(2);
+    const preferredDayHits = result.games.reduce((count, game) => {
+      return count +
+        (game.preferenceApplied?.home_team?.filter((p) => p === "preferred_day").length || 0) +
+        (game.preferenceApplied?.away_team?.filter((p) => p === "preferred_day").length || 0);
+    }, 0);
+    expect(preferredDayHits).toBe(2);
+  });
 });
