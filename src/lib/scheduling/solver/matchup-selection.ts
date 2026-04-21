@@ -374,9 +374,25 @@ export function buildMatchupSelectionLP(input: MatchupSelectionInput): {
 export async function solveMatchupSelection(
   input: MatchupSelectionInput
 ): Promise<MatchupSelectionResult> {
-  const { lp, meta } = buildMatchupSelectionLP(input);
+  const { lp, meta, binaries, generals } = buildMatchupSelectionLP(input);
   const highs = await loadHighs();
-  const result = highs.solve(lp);
+  let result: HighsResult;
+  try {
+    result = highs.solve(lp);
+  } catch (err) {
+    const details = [
+      `teams=${input.teams.length}`,
+      `pairs=${input.pairs.length}`,
+      `weeks=${input.weeks}`,
+      `slotsPerWeek=${input.slotsPerWeek}`,
+      `binaryVars=${binaries.length}`,
+      `integerVars=${generals.length}`,
+      `lpBytes=${Buffer.byteLength(lp, "utf8")}`,
+    ].join(", ");
+    throw new Error(
+      `Matchup selection solver crashed (${details}): ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
 
   const notes: string[] = [];
   if (result.Status !== "Optimal") {

@@ -100,6 +100,10 @@ export function buildSlotAssignmentLP(input: SlotAssignmentInput): {
     gameKeyByVar: Map<string, { gameId: string; bucket: number; slot: SlotAssignmentCourtSlot }>;
     slots: SlotAssignmentCourtSlot[];
   };
+  stats: {
+    binaryCount: number;
+    slotCount: number;
+  };
 } {
   const { games, buckets } = input;
   const slots = input.courtSlots?.length
@@ -274,15 +278,33 @@ export function buildSlotAssignmentLP(input: SlotAssignmentInput): {
   return {
     lp: lp.join("\n"),
     meta: { gameKeyByVar, slots },
+    stats: {
+      binaryCount: binaries.length,
+      slotCount: slots.length,
+    },
   };
 }
 
 export async function solveSlotAssignment(
   input: SlotAssignmentInput
 ): Promise<SlotAssignmentResult> {
-  const { lp, meta } = buildSlotAssignmentLP(input);
+  const { lp, meta, stats } = buildSlotAssignmentLP(input);
   const highs = await loadHighs();
-  const result = highs.solve(lp);
+  let result: HighsResult;
+  try {
+    result = highs.solve(lp);
+  } catch (err) {
+    const details = [
+      `games=${input.games.length}`,
+      `buckets=${input.buckets}`,
+      `slots=${stats.slotCount}`,
+      `binaryVars=${stats.binaryCount}`,
+      `lpBytes=${Buffer.byteLength(lp, "utf8")}`,
+    ].join(", ");
+    throw new Error(
+      `Slot assignment solver crashed (${details}): ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
 
   const notes: string[] = [];
   if (result.Status !== "Optimal") {
