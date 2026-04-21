@@ -1,7 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getProfile } from "@/lib/supabase/helpers";
 import { fillScheduleByWeek, schedulePreflight } from "@/lib/scheduling/week-fill";
-import { solveSchedule, type SolveScheduleResult } from "@/lib/scheduling/solver";
+import { solveSchedule } from "@/lib/scheduling/solver";
 import { localToUTCISO, parseLocalDate } from "@/lib/scheduling/date-utils";
 import { computeReseedPools, type ReseedMode } from "@/lib/scheduling/reseed";
 import {
@@ -319,7 +319,7 @@ export async function POST(request: NextRequest) {
   const requestedEngine: "greedy" | "solver" = engine === "solver" ? "solver" : "greedy";
   let engineUsed: "greedy" | "solver" = requestedEngine;
   const schedulerWarnings: string[] = [];
-  let result: Awaited<ReturnType<typeof fillScheduleByWeek>> | SolveScheduleResult;
+  let result: Awaited<ReturnType<typeof fillScheduleByWeek>> | Awaited<ReturnType<typeof solveSchedule>>;
   const courtSlots = buildCourtSlots(effectiveLocationIds, locationsMap);
   if (requestedEngine === "solver") {
     try {
@@ -376,7 +376,7 @@ export async function POST(request: NextRequest) {
   const gamesToInsert = [];
   let locationAssignmentDroppedCount = 0;
 
-  if (requestedEngine === "solver" && hasAssignedGames(result)) {
+  if (engineUsed === "solver" && "locationSplitCount" in result) {
     locationAssignmentDroppedCount = result.locationAssignmentDroppedCount || 0;
     if ((result.locationSplitCount || 0) > 0) {
       schedulerWarnings.push(
@@ -384,10 +384,11 @@ export async function POST(request: NextRequest) {
       );
     }
     gamesToInsert.push(
-      ...toAssignedGamesInsertRows({
+      ...toScheduledGamesInsertRows({
         leagueId,
         timezone,
-        games: result.assignedGames,
+        games: result.games,
+        defaultLocationId: pattern.location_ids?.[0] || null,
       })
     );
   } else if (courtSlots.length > 0) {
@@ -466,10 +467,4 @@ export async function POST(request: NextRequest) {
 function formatSchedulerError(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
-}
-
-function hasAssignedGames(
-  result: Awaited<ReturnType<typeof fillScheduleByWeek>> | SolveScheduleResult
-): result is SolveScheduleResult & { assignedGames: NonNullable<SolveScheduleResult["assignedGames"]> } {
-  return "assignedGames" in result && Array.isArray(result.assignedGames);
 }

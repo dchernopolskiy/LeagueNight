@@ -8,9 +8,6 @@ import type {
 import { schedulePreflight } from "./week-fill";
 import { formatYMD } from "./date-utils";
 import {
-  assignGamesToLocationCourtSlots,
-  findSameNightLocationSplits,
-  type LocationAssignedGame,
   type LocationCourtSlot,
 } from "./location-assignment";
 import {
@@ -32,17 +29,14 @@ export interface SolveScheduleLocationOptions {
 }
 
 export interface SolveScheduleResult extends WeekFillResult {
-  assignedGames?: LocationAssignedGame[];
   locationAssignmentDroppedCount?: number;
   locationSplitCount?: number;
 }
 
 /**
  * Two-phase ILP scheduler. Phase 1 assigns pairs to weeks (HiGHS MIP),
- * Phase 2 assigns each week's games to (bucket, court). Multi-venue
- * distribution remains a post-pass in location-assignment.ts; this function
- * emits games with `venue: pattern.venue` (single-venue default), matching
- * the legacy greedy output shape.
+ * Phase 2 assigns each week's games to (bucket, court, location) when venue
+ * court slots are provided.
  */
 export async function solveSchedule(
   params: FillParams,
@@ -126,11 +120,19 @@ export async function solveSchedule(
     });
 
     const teamPreferences = buildWeekPreferences(teamsById, phase2Games, weekNumber);
+    const weekCourtSlots = locationOptions?.courtSlots.length
+      ? filterWeekCourtSlots(
+          locationOptions.courtSlots,
+          locationOptions.unavailByDate,
+          dayDate
+        )
+      : undefined;
 
     const phase2 = await solvePhase2({
       games: phase2Games,
       buckets: slotsPerDay,
       courtsPerBucket: pattern.courtCount,
+      courtSlots: weekCourtSlots,
       teamPreferences,
     });
     if (phase2.status !== "Optimal") {
@@ -169,7 +171,8 @@ export async function solveSchedule(
         home: g.teamA,
         away: g.teamB,
         scheduledAt,
-        venue: pattern.venue,
+        venue: slot.locationName ?? pattern.venue,
+        locationId: slot.locationId ?? null,
         court: pattern.courtCount > 1 ? `Court ${slot.court}` : null,
         weekNumber,
         preferenceApplied:
@@ -192,19 +195,8 @@ export async function solveSchedule(
     `Solver: scheduled ${games.length} game${games.length === 1 ? "" : "s"} across ${targetWeeks} target week${targetWeeks === 1 ? "" : "s"}`
   );
 
-  let assignedGames: LocationAssignedGame[] | undefined;
-  let locationAssignmentDroppedCount = 0;
-  let locationSplitCount = 0;
-  if (locationOptions && locationOptions.courtSlots.length > 0) {
-    assignedGames = assignGamesToLocationCourtSlots(
-      games,
-      locationOptions.courtSlots,
-      locationOptions.unavailByDate,
-      locationOptions.teamDivisionIds || new Map()
-    );
-    locationAssignmentDroppedCount = games.length - assignedGames.length;
-    locationSplitCount = findSameNightLocationSplits(assignedGames).length;
-  }
+  const locationAssignmentDroppedCount = 0;
+  const locationSplitCount = countSameNightLocationSplits(games);
 
   return {
     games,
@@ -220,7 +212,6 @@ export async function solveSchedule(
     })),
     targetWeeks,
     availableWeeks,
-    assignedGames,
     locationAssignmentDroppedCount,
     locationSplitCount,
   };
@@ -319,6 +310,37 @@ function applyPreferredDayHit(
 }
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function filterWeekCourtSlots(
+  courtSlots: LocationCourtSlot[],
+  unavailByDate: Map<string, Set<string>>,
+  dayDate: Date
+): LocationCourtSlot[] {
+  const unavailableLocationIds = unavailByDate.get(formatYMD(dayDate)) || new Set<string>();
+  const availableSlots = courtSlots.filter(
+    (slot) => !unavailableLocationIds.has(slot.locationId)
+  );
+  return availableSlots.length > 0 ? availableSlots : courtSlots;
+}
+
+function countSameNightLocationSplits(games: WeekFillScheduledGame[]): number {
+  const locationsByTeamDate = new Map<string, Set<string>>();
+  for (const game of games) {
+    if (!game.locationId) continue;
+    const date = formatYMD(game.scheduledAt);
+    for (const teamId of [game.home, game.away]) {
+      const key = `${date}:${teamId}`;
+      const locations = locationsByTeamDate.get(key) || new Set<string>();
+      locations.add(game.locationId);
+      locationsByTeamDate.set(key, locations);
+    }
+  }
+  let count = 0;
+  for (const locations of locationsByTeamDate.values()) {
+    if (locations.size > 1) count++;
+  }
+  return count;
+}
 
 // ── Local helpers (duplicated from week-fill.ts to avoid export churn) ──────
 

@@ -72,6 +72,29 @@ describe("Phase 2: slot/court ILP", () => {
     expect(xBuckets[1] - xBuckets[0]).toBe(1);
   }, 15_000);
 
+  it("keeps a team's games at one location when venue slots are provided", async () => {
+    const games: Phase2Game[] = [
+      { id: "g1", pairKey: "X|Y", teamA: "X", teamB: "Y" },
+      { id: "g2", pairKey: "X|Z", teamA: "X", teamB: "Z" },
+    ];
+    const result = await solvePhase2({
+      games,
+      buckets: 2,
+      courtSlots: [
+        { locationId: "reeves", locationName: "Reeves", courtNum: 1, totalCourts: 1 },
+        { locationId: "marshall", locationName: "Marshall", courtNum: 1, totalCourts: 1 },
+      ],
+    });
+
+    expect(result.status).toBe("Optimal");
+    const xSlots = result.slots.filter((slot) => {
+      const game = games.find((g) => g.id === slot.gameId)!;
+      return game.teamA === "X" || game.teamB === "X";
+    });
+    expect(xSlots).toHaveLength(2);
+    expect(new Set(xSlots.map((slot) => slot.locationId))).toEqual(new Set(["reeves"]));
+  }, 15_000);
+
   it("honors a team's early time preference when capacity allows", async () => {
     // 2 games across 4 buckets × 1 court. Team A prefers early; it should
     // land in bucket 0 or 1 (the early half), not 2 or 3.

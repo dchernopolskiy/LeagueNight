@@ -1,9 +1,6 @@
 import { localToUTCISO } from "@/lib/scheduling/date-utils";
-import type {
-  LocationAssignedGame,
-  LocationCourtSlot,
-  LocationAssignableGame,
-} from "@/lib/scheduling/location-assignment";
+import type { LocationAssignedGame, LocationCourtSlot } from "@/lib/scheduling/location-assignment";
+import type { WeekFillScheduledGame } from "@/lib/scheduling/week-fill";
 
 export type SchedulerEngine = "greedy" | "solver";
 
@@ -101,7 +98,7 @@ export function toAssignedGamesInsertRows(input: {
 export function toScheduledGamesInsertRows(input: {
   leagueId: string;
   timezone: string;
-  games: LocationAssignableGame[];
+  games: WeekFillScheduledGame[];
   defaultLocationId: string | null;
 }): ScheduleGameInsert[] {
   return input.games.map((g) => ({
@@ -113,7 +110,7 @@ export function toScheduledGamesInsertRows(input: {
     court: g.court,
     week_number: g.weekNumber,
     status: "scheduled",
-    location_id: input.defaultLocationId,
+    location_id: g.locationId ?? input.defaultLocationId,
     preference_applied: g.preferenceApplied || null,
     scheduling_notes: g.schedulingNotes || null,
   }));

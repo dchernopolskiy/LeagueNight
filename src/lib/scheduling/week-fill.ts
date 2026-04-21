@@ -40,6 +40,7 @@ export interface WeekFillScheduledGame {
   away: string;
   scheduledAt: Date;
   venue: string | null;
+  locationId?: string | null;
   court: string | null;
   weekNumber: number;
   preferenceApplied?: PreferenceApplied | null;
