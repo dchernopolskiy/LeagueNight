@@ -62,6 +62,3 @@ scripts/recreate-volleyball-data.ts
 scripts/recreate-volleyball-env.ts
 scripts/recreate-volleyball-simple.ts
 scripts/ultimate-cleanup.ts
-schedule_dump.json
-query_db.js
-analyze_distribution.js
