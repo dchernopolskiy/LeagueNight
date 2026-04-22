@@ -619,7 +619,7 @@ async function callSchedulerService(input: {
   const payload = {
     league: {
       start_date: input.regenerateFrom ?? input.pattern.starts_on,
-      end_date: input.pattern.ends_on,
+      end_date: null,
       day_of_week: input.pattern.day_of_week,
       start_time: input.pattern.start_time.slice(0, 5),
       end_time: input.pattern.end_time ? input.pattern.end_time.slice(0, 5) : null,
