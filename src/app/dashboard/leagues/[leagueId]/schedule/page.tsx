@@ -69,6 +69,44 @@ function Stat({ label, value, warn }: { label: string; value: string | number; w
   );
 }
 
+type GenerationProgressState = {
+  startedAt: number;
+  engine: "greedy" | "solver" | "service";
+  stageIndex: number;
+  stages: string[];
+  elapsedMs: number;
+};
+
+function generationStagesForEngine(
+  engine: "greedy" | "solver" | "service"
+): string[] {
+  if (engine === "service") {
+    return [
+      "Preparing league inputs",
+      "Preselecting crossplay",
+      "Building round-robin warm start",
+      "Solving week and venue plan",
+      "Assigning timeslots",
+      "Saving schedule",
+    ];
+  }
+  if (engine === "solver") {
+    return [
+      "Preparing league inputs",
+      "Building solver model",
+      "Solving schedule",
+      "Assigning locations and courts",
+      "Saving schedule",
+    ];
+  }
+  return [
+    "Preparing league inputs",
+    "Building round-robin plan",
+    "Assigning locations and courts",
+    "Saving schedule",
+  ];
+}
+
 function formatSchedulerLabel(
   scheduler?: {
     requestedEngine: "greedy" | "solver" | "service";
@@ -108,6 +146,7 @@ export default function SchedulePage() {
   );
 
   const [generating, setGenerating] = useState(false);
+  const [generationProgress, setGenerationProgress] = useState<GenerationProgressState | null>(null);
   const [schedulingWarnings, setSchedulingWarnings] = useState<string[]>([]);
   const [exportError, setExportError] = useState<string | null>(null);
   const [preflightPrompt, setPreflightPrompt] = useState<{
@@ -170,6 +209,27 @@ export default function SchedulePage() {
       window.sessionStorage.removeItem(generationStatsKey);
     }
   }, [generationStatsKey]);
+
+  useEffect(() => {
+    if (!generating || !generationProgress) return;
+    const id = window.setInterval(() => {
+      setGenerationProgress((current) => {
+        if (!current) return current;
+        const elapsedMs = Date.now() - current.startedAt;
+        const stageDurationMs = current.engine === "service" ? 4500 : current.engine === "solver" ? 3500 : 2500;
+        const nextStage = Math.min(
+          current.stages.length - 1,
+          Math.floor(elapsedMs / stageDurationMs)
+        );
+        return {
+          ...current,
+          elapsedMs,
+          stageIndex: nextStage,
+        };
+      });
+    }, 400);
+    return () => window.clearInterval(id);
+  }, [generating, generationProgress]);
 
   // Fetch locations separately (organizer-scoped, not league-scoped)
   const [locations, setLocations] = useState<Location[]>([]);
@@ -261,6 +321,14 @@ export default function SchedulePage() {
   ) {
     setGenerating(true);
     setReseedBlock(null);
+    const selectedEngine = opts.engine ?? "service";
+    setGenerationProgress({
+      startedAt: Date.now(),
+      engine: selectedEngine,
+      stageIndex: 0,
+      stages: generationStagesForEngine(selectedEngine),
+      elapsedMs: 0,
+    });
     const res = await fetch("/api/schedule/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -289,6 +357,7 @@ export default function SchedulePage() {
           retry: () => generateSchedule(patternId, opts, true),
         });
         setGenerating(false);
+        setGenerationProgress(null);
         return;
       }
       if (data.error === "reseed_blocked_unplayed_games") {
@@ -298,6 +367,7 @@ export default function SchedulePage() {
           message: data.message,
         });
         setGenerating(false);
+        setGenerationProgress(null);
         return;
       }
     }
@@ -325,6 +395,7 @@ export default function SchedulePage() {
     }
     setPreflightPrompt(null);
     setGenerating(false);
+    setGenerationProgress(null);
   }
 
   // Half-season cutoff: most recent pattern.last_regenerated_at, falling back
@@ -662,6 +733,50 @@ export default function SchedulePage() {
           />
         </CardContent>
       </Card>
+
+      {generating && generationProgress && (
+        <Card className="border-blue-200 bg-blue-50/60">
+          <CardHeader>
+            <CardTitle className="text-base text-blue-900 flex items-center gap-2">
+              <Zap className="h-4 w-4" />
+              Generating schedule
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between text-sm text-blue-950">
+              <span>{generationProgress.stages[generationProgress.stageIndex]}</span>
+              <span>{(generationProgress.elapsedMs / 1000).toFixed(1)}s</span>
+            </div>
+            <div className="h-2 rounded-full bg-blue-100 overflow-hidden">
+              <div
+                className="h-full bg-blue-500 transition-all duration-500"
+                style={{
+                  width: `${Math.max(
+                    8,
+                    ((generationProgress.stageIndex + 1) / generationProgress.stages.length) * 100
+                  )}%`,
+                }}
+              />
+            </div>
+            <ul className="space-y-1 text-xs text-blue-900/80">
+              {generationProgress.stages.map((stage, index) => (
+                <li
+                  key={stage}
+                  className={
+                    index < generationProgress.stageIndex
+                      ? "text-blue-900"
+                      : index === generationProgress.stageIndex
+                        ? "font-medium text-blue-950"
+                        : "text-blue-900/55"
+                  }
+                >
+                  {index < generationProgress.stageIndex ? "✓" : index === generationProgress.stageIndex ? "•" : "○"} {stage}
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Preflight truncation prompt */}
       {preflightPrompt && (
