@@ -370,6 +370,15 @@ export async function POST(request: NextRequest) {
   const courtSlots = buildCourtSlots(effectiveLocationIds, locationsMap);
   if (requestedEngine === "service") {
     try {
+      // Pre-calculate hints using the greedy scheduler
+      const greedyResult = fillScheduleByWeek(fillParams);
+      const hints = greedyResult.games.map((g) => ({
+        team_a_id: g.home,
+        team_b_id: g.away,
+        week_number: g.weekNumber,
+        venue_id: g.locationId || null,
+      }));
+
       const serviceResult = await callSchedulerService({
         timezone,
         gamesPerTeam,
@@ -385,6 +394,7 @@ export async function POST(request: NextRequest) {
         reseedTeamWeights,
         locationsData,
         unavailByDate,
+        hints,
       });
       if (serviceResult.status === "infeasible") {
         engineUsed = "greedy";
@@ -599,6 +609,7 @@ async function callSchedulerService(input: {
   reseedTeamWeights: Map<string, number> | null;
   locationsData: Array<{ id: string; name: string; court_count: number }>;
   unavailByDate: Map<string, Set<string>>;
+  hints?: Array<{ team_a_id: string; team_b_id: string; week_number: number; venue_id: string | null }>;
 }): Promise<SchedulerServiceResponse> {
   const baseUrl = process.env.SCHEDULER_SERVICE_URL;
   const token = process.env.SCHEDULER_SERVICE_TOKEN;
@@ -645,6 +656,7 @@ async function callSchedulerService(input: {
           existing_matchup_counts: Object.fromEntries(input.existingMatchupCounts),
         }
       : null,
+    hints: input.hints || [],
   };
 
   const controller = new AbortController();
