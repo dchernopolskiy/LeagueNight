@@ -2,7 +2,7 @@ import { localToUTCISO } from "@/lib/scheduling/date-utils";
 import type { LocationAssignedGame, LocationCourtSlot } from "@/lib/scheduling/location-assignment";
 import type { WeekFillScheduledGame } from "@/lib/scheduling/week-fill";
 
-export type SchedulerEngine = "greedy" | "solver" | "service";
+export type SchedulerEngine = "greedy" | "service";
 
 export type ScheduleGameInsert = {
   league_id: string;
@@ -44,10 +44,9 @@ export function validateGenerateRequest(input: {
   if (
     input.engine !== undefined &&
     input.engine !== "greedy" &&
-    input.engine !== "solver" &&
     input.engine !== "service"
   ) {
-    return "engine must be either greedy, solver, or service";
+    return "engine must be either greedy or service";
   }
   return null;
 }

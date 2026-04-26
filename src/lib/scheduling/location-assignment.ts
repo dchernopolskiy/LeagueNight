@@ -318,8 +318,8 @@ function bestFallbackSlot(
     const awayLocation = teamLocation.get(game.away);
     if (homeLocation === slot.locationId) score += 1000;
     if (awayLocation === slot.locationId) score += 1000;
-    if (homeLocation && homeLocation !== slot.locationId) score -= 500;
-    if (awayLocation && awayLocation !== slot.locationId) score -= 500;
+    if (homeLocation && homeLocation !== slot.locationId) score -= 10000;
+    if (awayLocation && awayLocation !== slot.locationId) score -= 10000;
 
     const homeDivision = teamDivisionIds.get(game.home);
     const awayDivision = teamDivisionIds.get(game.away);

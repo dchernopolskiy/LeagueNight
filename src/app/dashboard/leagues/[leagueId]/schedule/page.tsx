@@ -71,14 +71,14 @@ function Stat({ label, value, warn }: { label: string; value: string | number; w
 
 type GenerationProgressState = {
   startedAt: number;
-  engine: "greedy" | "solver" | "service";
+  engine: "greedy" | "service";
   stageIndex: number;
   stages: string[];
   elapsedMs: number;
 };
 
 function generationStagesForEngine(
-  engine: "greedy" | "solver" | "service"
+  engine: "greedy" | "service"
 ): string[] {
   if (engine === "service") {
     return [
@@ -87,15 +87,6 @@ function generationStagesForEngine(
       "Building round-robin warm start",
       "Solving week and venue plan",
       "Assigning timeslots",
-      "Saving schedule",
-    ];
-  }
-  if (engine === "solver") {
-    return [
-      "Preparing league inputs",
-      "Building solver model",
-      "Solving schedule",
-      "Assigning locations and courts",
       "Saving schedule",
     ];
   }
@@ -109,13 +100,13 @@ function generationStagesForEngine(
 
 function formatSchedulerLabel(
   scheduler?: {
-    requestedEngine: "greedy" | "solver" | "service";
-    engineUsed: "greedy" | "solver" | "service";
+    requestedEngine: "greedy" | "service";
+    engineUsed: "greedy" | "service";
   }
 ): string {
   if (!scheduler) return "CP-SAT";
-  const formatEngine = (engine: "greedy" | "solver" | "service") =>
-    engine === "service" ? "CP-SAT" : engine === "solver" ? "Solver" : "Greedy";
+  const formatEngine = (engine: "greedy" | "service") =>
+    engine === "service" ? "CP-SAT" : "Greedy";
   const used = formatEngine(scheduler.engineUsed);
   if (scheduler.requestedEngine === scheduler.engineUsed) return used;
   const requested = formatEngine(scheduler.requestedEngine);
@@ -179,8 +170,8 @@ export default function SchedulePage() {
       matchupFrequency: number;
     };
     scheduler?: {
-      requestedEngine: "greedy" | "solver" | "service";
-      engineUsed: "greedy" | "solver" | "service";
+      requestedEngine: "greedy" | "service";
+      engineUsed: "greedy" | "service";
     };
     warnings?: string[];
     generatedAt: string;
@@ -216,7 +207,7 @@ export default function SchedulePage() {
       setGenerationProgress((current) => {
         if (!current) return current;
         const elapsedMs = Date.now() - current.startedAt;
-        const stageDurationMs = current.engine === "service" ? 4500 : current.engine === "solver" ? 3500 : 2500;
+        const stageDurationMs = current.engine === "service" ? 4500 : 2500;
         const nextStage = Math.min(
           current.stages.length - 1,
           Math.floor(elapsedMs / stageDurationMs)
@@ -315,7 +306,7 @@ export default function SchedulePage() {
       regenerateFrom?: string;
       locationIds: string[];
       reseedMode?: "by_skill" | "within_division";
-      engine?: "greedy" | "solver" | "service";
+      engine?: "greedy" | "service";
     },
     acceptTruncation = false
   ) {

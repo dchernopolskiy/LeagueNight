@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { schedulePreflight } from "./week-fill";
-import { solveSchedule } from "./solver";
 import { findSameNightLocationSplits } from "./location-assignment";
 import {
   buildTeams,
@@ -10,17 +9,15 @@ import {
 } from "./__fixtures__/helpers";
 import { runScheduler, type SchedulerMode } from "./__fixtures__/run-scheduler";
 
-// Engines under test. Flip to ["greedy", "solver"] once the ILP models land;
-// the harness is already shape-compatible. Using `satisfies` so extending the
-// list surfaces any TS mismatch.
-const ENGINES: SchedulerMode[] = ["greedy", "solver"] satisfies SchedulerMode[];
+// Engines under test.
+const ENGINES: SchedulerMode[] = ["greedy"] satisfies SchedulerMode[];
 
 function perEngine(
   name: string,
   body: (mode: SchedulerMode) => void
 ): void {
   for (const mode of ENGINES) {
-    describe(`${name} [${mode}]`, () => body(mode));
+    describe(`${name}`, () => body(mode));
   }
 }
 
@@ -286,10 +283,8 @@ perEngine("scheduler: within-night adjacency", (mode) => {
       }
     }
     // This setup asks for 6 games per team across 3 Mondays, so repeats force
-    // three full doubleheader nights. Greedy has a local adjacency bonus; the
-    // solver's Phase 1 first optimizes season-level pairing fairness, then
-    // Phase 2 minimizes within-night gaps for the chosen week graph.
-    expect(totalGap).toBeLessThanOrEqual(mode === "solver" ? 4 : 3);
+    // three full doubleheader nights. Greedy has a local adjacency bonus.
+    expect(totalGap).toBeLessThanOrEqual(3);
   });
 });
 
@@ -482,94 +477,3 @@ perEngine("scheduler: preference parity", (mode) => {
   });
 });
 
-describe("solver: regeneration scenario", () => {
-  it("avoids already-played matchups when regeneration has alternatives", async () => {
-    const teams = mkTeams(4, "d1", "T");
-    const { weekFillTeams, teamsMap } = buildTeams(teams);
-    const pattern = defaultPattern({
-      courtCount: 2,
-      startsOn: new Date("2026-01-05"),
-      endsOn: new Date("2026-01-26"),
-    });
-
-    const result = await solveSchedule({
-      teams: weekFillTeams,
-      pattern,
-      opts: {
-        matchupFrequency: 1,
-        gamesPerSession: 1,
-        allowCrossPlay: false,
-        gamesPerTeam: 2,
-      },
-      teamsMap,
-      regenerateFromDate: new Date("2026-01-19T00:00:00"),
-      existingMatchupCounts: new Map([["T-1|T-2", 1]]),
-    });
-
-    expect(result.games.length).toBeGreaterThan(0);
-    const pairs = new Set(
-      result.games.map((g) => [g.home, g.away].sort().join("|"))
-    );
-    expect(pairs.has("T-1|T-2")).toBe(false);
-  });
-});
-
-describe("solver: multi-location crossplay scenario", () => {
-  it("keeps teams at one location across a mixed multi-division night", async () => {
-    const teams: ScenarioTeam[] = [
-      ...mkTeams(4, "A", "A"),
-      ...mkTeams(6, "BP", "BP"),
-      ...mkTeams(4, "B", "B"),
-    ];
-    const { weekFillTeams, teamsMap } = buildTeams(teams);
-    const pattern = defaultPattern({
-      courtCount: 4,
-      endTime: "21:00",
-      durationMinutes: 60,
-      endsOn: new Date("2026-02-02"),
-    });
-
-    const result = await solveSchedule(
-      {
-        teams: weekFillTeams,
-        pattern,
-        opts: {
-          matchupFrequency: 1,
-          gamesPerSession: 2,
-          allowCrossPlay: true,
-          crossPlayRules: [
-            { division_a_id: "A", division_b_id: "BP" },
-            { division_a_id: "B", division_b_id: "BP" },
-          ],
-          gamesPerTeam: 4,
-        },
-        teamsMap,
-      },
-      {
-        courtSlots: [
-          { locationId: "reeves", courtNum: 1, locationName: "Reeves", totalCourts: 2 },
-          { locationId: "reeves", courtNum: 2, locationName: "Reeves", totalCourts: 2 },
-          { locationId: "marshall", courtNum: 1, locationName: "Marshall", totalCourts: 2 },
-          { locationId: "marshall", courtNum: 2, locationName: "Marshall", totalCourts: 2 },
-        ],
-        unavailByDate: new Map(),
-        teamDivisionIds: new Map(weekFillTeams.map((team) => [team.id, team.division_id])),
-      }
-    );
-
-    expect(result.games.length).toBeGreaterThan(0);
-    expect(result.locationSplitCount).toBe(0);
-    expect(findSameNightLocationSplits(
-      result.games.map((g) => ({
-        ...g,
-        locationId: g.locationId!,
-        locationName: g.venue!,
-        courtNum: Number(g.court?.replace("Court ", "") || 1),
-        totalCourts: 2,
-      }))
-    )).toEqual([]);
-    expect(new Set(result.games.map((g) => g.locationId))).toEqual(
-      new Set(["marshall", "reeves"])
-    );
-  }, 20_000);
-});

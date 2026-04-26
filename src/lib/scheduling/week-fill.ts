@@ -33,12 +33,17 @@ export interface WeekFillOptions {
   // round-robin requires, season length extends and the extra weeks are
   // filled with crossplay (when allowed) or repeat matchups.
   gamesPerTeam?: number;
+  // When provided, the greedy fill ensures that any cluster of connected teams
+  // (teams that must play at the same venue to avoid relocation) does not
+  // require more simultaneous courts than the largest venue provides.
+  maxCourtsPerVenue?: number;
 }
 
 export interface WeekFillScheduledGame {
   home: string;
   away: string;
   scheduledAt: Date;
+  bucket: number;
   venue: string | null;
   locationId?: string | null;
   court: string | null;
@@ -585,6 +590,53 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
     const dayDate = gameDays[wIdx];
     const weekNumber = wIdx + 1;
 
+    const maxCourts = opts.maxCourtsPerVenue || courtCount;
+    const compParent = new Map<string, string>();
+    const compCounts = new Map<string, Map<number, number>>();
+    for (const t of teams) {
+      compParent.set(t.id, t.id);
+      compCounts.set(t.id, new Map());
+    }
+
+    function findRoot(tid: string): string {
+      const p = compParent.get(tid)!;
+      if (p === tid) return tid;
+      const root = findRoot(p);
+      compParent.set(tid, root);
+      return root;
+    }
+
+    function canAdd(a: string, b: string, bucket: number): boolean {
+      if (maxCourts >= courtCount) return true;
+      const rootA = findRoot(a);
+      const rootB = findRoot(b);
+      const countsA = compCounts.get(rootA)!;
+      const countsB = compCounts.get(rootB)!;
+      const combinedBuckets = new Set([...countsA.keys(), ...countsB.keys(), bucket]);
+      for (const bkt of combinedBuckets) {
+        const count = (countsA.get(bkt) || 0) + (countsB.get(bkt) || 0) + (bkt === bucket ? 1 : 0);
+        if (count > maxCourts) return false;
+      }
+      return true;
+    }
+
+    function addGame(a: string, b: string, bucket: number) {
+      const rootA = findRoot(a);
+      const rootB = findRoot(b);
+      if (rootA !== rootB) {
+        compParent.set(rootB, rootA);
+        const countsA = compCounts.get(rootA)!;
+        const countsB = compCounts.get(rootB)!;
+        for (const [bkt, count] of countsB) {
+          countsA.set(bkt, (countsA.get(bkt) || 0) + count);
+        }
+        compCounts.delete(rootB);
+      }
+      const finalRoot = findRoot(a);
+      const finalCounts = compCounts.get(finalRoot)!;
+      finalCounts.set(bucket, (finalCounts.get(bucket) || 0) + 1);
+    }
+
     // Per-week tracking
     const gamesThisWeek = new Map<string, number>(); // teamId -> count this week
     const slotTeams = new Map<number, Set<string>>(); // slotBucket -> teams playing in that time bucket
@@ -620,6 +672,7 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
         const bucket = slotBucket(slotIdx);
         const teamsInBucket = slotTeams.get(bucket) || new Set<string>();
         if (teamsInBucket.has(seed.a) || teamsInBucket.has(seed.b)) continue;
+        if (!canAdd(seed.a, seed.b, bucket)) continue;
         if ((gamesThisWeek.get(seed.a) || 0) >= opts.gamesPerSession) continue;
         if ((gamesThisWeek.get(seed.b) || 0) >= opts.gamesPerSession) continue;
         const slotDate = slotTime(dayDate, slotIdx);
@@ -649,10 +702,13 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
       const slotDate = slotTime(dayDate, bestSlotIdx);
       const courtNum = (bestSlotIdx % courtCount) + 1;
 
+      addGame(seed.a, seed.b, bucket);
+
       resultGames.push({
         home: seed.a,
         away: seed.b,
         scheduledAt: slotDate,
+        bucket,
         venue: pattern.venue,
         court: courtCount > 1 ? `Court ${courtNum}` : null,
         weekNumber,
@@ -692,6 +748,7 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
       for (const [key, pair] of pairs) {
         if (!isTeamEligible(pair.teamA) || !isTeamEligible(pair.teamB)) continue;
         if (teamsInBucket.has(pair.teamA) || teamsInBucket.has(pair.teamB)) continue;
+        if (!canAdd(pair.teamA, pair.teamB, bucket)) continue;
 
         // Within-division pairs are seeded in advance (circle method). Greedy
         // only picks a within-div pair as a *repeat* (playedCount > 0), and
@@ -713,10 +770,12 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
 
       const pair = pairs.get(bestKey)!;
       const courtNum = (slotIdx % courtCount) + 1;
+      addGame(pair.teamA, pair.teamB, bucket);
       resultGames.push({
         home: pair.teamA, // home/away arbitrary; can alternate later
         away: pair.teamB,
         scheduledAt: slotDate,
+        bucket,
         venue: pattern.venue,
         court: courtCount > 1 ? `Court ${courtNum}` : null,
         weekNumber,
@@ -1049,9 +1108,10 @@ function annealSchedule(params: AnnealParams): string[] {
     const gi = games[indices[i]];
     const gj = games[indices[j]];
     const tmpAt = gi.scheduledAt;
+    const tmpBucket = gi.bucket;
     const tmpCourt = gi.court;
-    games[indices[i]] = { ...gi, scheduledAt: gj.scheduledAt, court: gj.court };
-    games[indices[j]] = { ...gj, scheduledAt: tmpAt, court: tmpCourt };
+    games[indices[i]] = { ...gi, scheduledAt: gj.scheduledAt, bucket: gj.bucket, court: gj.court };
+    games[indices[j]] = { ...gj, scheduledAt: tmpAt, bucket: tmpBucket, court: tmpCourt };
   }
 
   const log: string[] = [];

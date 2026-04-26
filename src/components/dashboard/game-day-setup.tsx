@@ -38,7 +38,7 @@ import type { GameDayPattern, Location, LocationUnavailability } from "@/lib/typ
 
 const DAY_LABELS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 const DAY_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-type SchedulerEngine = "greedy" | "solver" | "service";
+type SchedulerEngine = "greedy" | "service";
 const DURATION_OPTIONS = [30, 45, 60, 75, 90, 120];
 
 // ── Holiday helpers ──────────────────────────────────────────────────────────
@@ -818,7 +818,6 @@ export function GameDaySetupPanel({
               <SelectContent>
                 <SelectItem value="service">CP-SAT</SelectItem>
                 <SelectItem value="greedy">Greedy</SelectItem>
-                <SelectItem value="solver">Solver</SelectItem>
               </SelectContent>
             </Select>
             <button
@@ -1028,7 +1027,6 @@ export function GameDaySetupPanel({
                 <SelectContent>
                   <SelectItem value="service">CP-SAT (service)</SelectItem>
                   <SelectItem value="greedy">Greedy</SelectItem>
-                  <SelectItem value="solver">Solver</SelectItem>
                 </SelectContent>
               </Select>
             </div>

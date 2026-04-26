@@ -3,15 +3,11 @@ import {
   type FillParams,
   type WeekFillResult,
 } from "@/lib/scheduling/week-fill";
-import { solveSchedule } from "@/lib/scheduling/solver";
 
-export type SchedulerMode = "greedy" | "solver";
+export type SchedulerMode = "greedy";
 
 /**
- * Thin dispatcher so fixture tests can execute against either engine. The
- * greedy branch wraps fillScheduleByWeek. The solver branch wires into
- * solveSchedule once Phase 1/2 ILP models land; until then solveSchedule
- * throws so any solver fixture fails loudly rather than silently skipping.
+ * Thin dispatcher so fixture tests can execute against the greedy engine.
  */
 export async function runScheduler(
   mode: SchedulerMode,
@@ -19,9 +15,6 @@ export async function runScheduler(
 ): Promise<WeekFillResult> {
   if (mode === "greedy") {
     return fillScheduleByWeek(params);
-  }
-  if (mode === "solver") {
-    return solveSchedule(params);
   }
   throw new Error(`unknown scheduler mode: ${mode satisfies never}`);
 }

@@ -1,7 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getProfile } from "@/lib/supabase/helpers";
 import { fillScheduleByWeek, schedulePreflight } from "@/lib/scheduling/week-fill";
-import { solveSchedule } from "@/lib/scheduling/solver";
 import { localToUTCISO, parseLocalDate } from "@/lib/scheduling/date-utils";
 import { computeReseedPools, type ReseedMode } from "@/lib/scheduling/reseed";
 import {
@@ -22,8 +21,7 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 type LocalSchedulerResult = Awaited<ReturnType<typeof fillScheduleByWeek>>;
-type SolverSchedulerResult = Awaited<ReturnType<typeof solveSchedule>>;
-type RouteSchedulerResult = LocalSchedulerResult | SolverSchedulerResult;
+type RouteSchedulerResult = LocalSchedulerResult;
 
 type SchedulerServicePreferences = {
   home_team?: string[];
@@ -279,6 +277,10 @@ export async function POST(request: NextRequest) {
     ? locationsData.reduce((s, l) => s + l.court_count, 0)
     : (pattern.court_count || 1);
 
+  const maxCourts = effectiveLocationIds.length > 0
+    ? Math.max(...locationsData.map((l) => l.court_count))
+    : (pattern.court_count || 1);
+
   // Build teamsMap for preference scoring
   const teamsMap = new Map(
     teams.map((t) => [t.id, { id: t.id, name: t.name, preferences: t.preferences }])
@@ -352,18 +354,20 @@ export async function POST(request: NextRequest) {
     opts: {
       matchupFrequency,
       gamesPerSession,
-      allowCrossPlay: effectiveMixDivisions,
-      crossPlayRules: effectiveCrossPlayRules,
+      allow_cross_play: effectiveMixDivisions,
+      cross_play_rules: effectiveCrossPlayRules,
       acceptTruncation,
       gamesPerTeam,
-    },
-    teamsMap,
+      maxCourtsPerVenue: maxCourts,
+      },
+      teamsMap,
+
     regenerateFromDate,
     existingMatchupCounts,
     teamWeights: reseedTeamWeights || undefined,
   };
   const requestedEngine: SchedulerEngine =
-    engine === "service" ? "service" : engine === "solver" ? "solver" : "greedy";
+    engine === "service" ? "service" : "greedy";
   let engineUsed: SchedulerEngine = requestedEngine;
   const schedulerWarnings: string[] = [];
   let result: RouteSchedulerResult;
@@ -377,6 +381,7 @@ export async function POST(request: NextRequest) {
         team_b_id: g.away,
         week_number: g.weekNumber,
         venue_id: g.locationId || null,
+        bucket: g.bucket,
       }));
 
       const serviceResult = await callSchedulerService({
@@ -409,22 +414,6 @@ export async function POST(request: NextRequest) {
       engineUsed = "greedy";
       schedulerWarnings.push(
         `CP-SAT service failed before persistence (${formatSchedulerError(err)}); used greedy scheduler instead.`
-      );
-      result = fillScheduleByWeek(fillParams);
-    }
-  } else if (requestedEngine === "solver") {
-    try {
-      result = await solveSchedule(fillParams, {
-        courtSlots,
-        unavailByDate,
-        teamDivisionIds: new Map(
-          weekFillTeams.map((team) => [team.id, team.division_id])
-        ),
-      });
-    } catch (err) {
-      engineUsed = "greedy";
-      schedulerWarnings.push(
-        `Solver failed before persistence (${formatSchedulerError(err)}); used greedy scheduler instead.`
       );
       result = fillScheduleByWeek(fillParams);
     }
@@ -468,21 +457,6 @@ export async function POST(request: NextRequest) {
   let locationAssignmentDroppedCount = 0;
 
   if (engineUsed === "service") {
-    gamesToInsert.push(
-      ...toScheduledGamesInsertRows({
-        leagueId,
-        timezone,
-        games: result.games,
-        defaultLocationId: pattern.location_ids?.[0] || null,
-      })
-    );
-  } else if (engineUsed === "solver" && "locationSplitCount" in result) {
-    locationAssignmentDroppedCount = result.locationAssignmentDroppedCount || 0;
-    if ((result.locationSplitCount || 0) > 0) {
-      schedulerWarnings.push(
-        formatLocationSplitWarning(result.locationSplitCount || 0)
-      );
-    }
     gamesToInsert.push(
       ...toScheduledGamesInsertRows({
         leagueId,
