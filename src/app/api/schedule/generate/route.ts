@@ -354,8 +354,8 @@ export async function POST(request: NextRequest) {
     opts: {
       matchupFrequency,
       gamesPerSession,
-      allow_cross_play: effectiveMixDivisions,
-      cross_play_rules: effectiveCrossPlayRules,
+      allowCrossPlay: effectiveMixDivisions,
+      crossPlayRules: effectiveCrossPlayRules,
       acceptTruncation,
       gamesPerTeam,
       maxCourtsPerVenue: maxCourts,
