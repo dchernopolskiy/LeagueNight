@@ -674,6 +674,7 @@ function normalizeServiceResult(
         home: game.home_team_id,
         away: game.away_team_id,
         scheduledAt: parseLocalDate(game.scheduled_at),
+        bucket: 0,
         venue: location?.name ?? null,
         locationId: game.venue_id,
         court: location && location.court_count > 1 ? `Court ${game.court_number}` : null,
