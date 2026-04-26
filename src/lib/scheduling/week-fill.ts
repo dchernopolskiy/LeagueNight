@@ -79,7 +79,7 @@ export interface PreflightResult {
   gamesPerTeamTarget: number; // desired games-per-team after sizing
 }
 
-function buildGameDays(pattern: WeekFillPattern): Date[] {
+export function buildGameDays(pattern: WeekFillPattern): Date[] {
   const [h, m] = pattern.startTime.split(":").map(Number);
   const skipSet = new Set(pattern.skipDates || []);
   const days: Date[] = [];
@@ -232,11 +232,18 @@ interface TeamState {
   lastByeWeek: number; // 0 = never
 }
 
+export interface WeekFillVenueCapacity {
+  id: string;
+  courtCount: number;
+}
+
 export interface FillParams {
   teams: WeekFillTeam[];
   pattern: WeekFillPattern;
   opts: WeekFillOptions;
   teamsMap: Map<string, Pick<Team, "id" | "name" | "preferences">>;
+  // date (YYYY-MM-DD) -> available venues and their court counts
+  venueCapacitiesByDate?: Map<string, WeekFillVenueCapacity[]>;
   regenerateFromDate?: Date | null;
   existingMatchupCounts?: Map<string, number>;
   // Re-seed mode: team weight in [0,1]. When provided, scoring adds a
@@ -589,8 +596,15 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
   for (let wIdx = 0; wIdx < weeksToFill; wIdx++) {
     const dayDate = gameDays[wIdx];
     const weekNumber = wIdx + 1;
+    const dateStr = formatYMD(dayDate);
 
-    const maxCourts = opts.maxCourtsPerVenue || courtCount;
+    // Per-week venue info
+    const dateVenues = venueCapacitiesByDate?.get(dateStr) || [
+      { id: "default", courtCount: pattern.courtCount },
+    ];
+    const dateCourtCount = dateVenues.reduce((s, v) => s + v.courtCount, 0);
+    const dateMaxCourts = Math.max(...dateVenues.map((v) => v.courtCount));
+
     const compParent = new Map<string, string>();
     const compCounts = new Map<string, Map<number, number>>();
     for (const t of teams) {
@@ -606,18 +620,83 @@ export function fillScheduleByWeek(params: FillParams): WeekFillResult {
       return root;
     }
 
+    /**
+     * Partition check: can all current components (plus the new game) be
+     * assigned to venues such that for each bucket, venue capacity is respected?
+     * This is a small bin-packing check (num components is small).
+     */
     function canAdd(a: string, b: string, bucket: number): boolean {
-      if (maxCourts >= courtCount) return true;
+      // 1. Simple width check against biggest venue
       const rootA = findRoot(a);
       const rootB = findRoot(b);
       const countsA = compCounts.get(rootA)!;
       const countsB = compCounts.get(rootB)!;
       const combinedBuckets = new Set([...countsA.keys(), ...countsB.keys(), bucket]);
       for (const bkt of combinedBuckets) {
-        const count = (countsA.get(bkt) || 0) + (countsB.get(bkt) || 0) + (bkt === bucket ? 1 : 0);
-        if (count > maxCourts) return false;
+        const count =
+          (countsA.get(bkt) || 0) + (countsB.get(bkt) || 0) + (bkt === bucket ? 1 : 0);
+        if (count > dateMaxCourts) return false;
       }
-      return true;
+
+      // 2. Global capacity check: sum of games in bucket must not exceed total courts
+      const totalInBucket = (slotTeams.get(bucket)?.size || 0) / 2 + 1;
+      if (totalInBucket > dateCourtCount) return false;
+
+      // 3. Bin-packing check: can we partition components into venues?
+      // Group all current component buckets.
+      const roots = new Set([...compParent.values()].map((id) => findRoot(id)));
+      const compWidthsByRoot = new Map<string, Map<number, number>>();
+      for (const r of roots) {
+        const counts = compCounts.get(r);
+        if (counts && counts.size > 0) {
+          compWidthsByRoot.set(r, new Map(counts));
+        }
+      }
+
+      // Add the proposed game to a virtual component (merging A and B)
+      const mergedRoot = "PROPOSED";
+      const mergedCounts = new Map<number, number>();
+      for (const bkt of combinedBuckets) {
+        mergedCounts.set(
+          bkt,
+          (countsA.get(bkt) || 0) + (countsB.get(bkt) || 0) + (bkt === bucket ? 1 : 0)
+        );
+      }
+      compWidthsByRoot.delete(rootA);
+      compWidthsByRoot.delete(rootB);
+      compWidthsByRoot.set(mergedRoot, mergedCounts);
+
+      const compList = Array.from(compWidthsByRoot.values());
+      const venueCaps = dateVenues.map((v) => v.courtCount);
+
+      // Recursive packing check
+      function canPack(cIdx: number, vRemaining: number[][]): boolean {
+        if (cIdx >= compList.length) return true;
+        const cWidths = compList[cIdx];
+        for (let vIdx = 0; vIdx < vRemaining.length; vIdx++) {
+          let fits = true;
+          for (const [bkt, width] of cWidths) {
+            if (vRemaining[vIdx][bkt] < width) {
+              fits = false;
+              break;
+            }
+          }
+          if (fits) {
+            // Recurse
+            for (const [bkt, width] of cWidths) vRemaining[vIdx][bkt] -= width;
+            if (canPack(cIdx + 1, vRemaining)) return true;
+            // Backtrack
+            for (const [bkt, width] of cWidths) vRemaining[vIdx][bkt] += width;
+          }
+        }
+        return false;
+      }
+
+      const initialRemaining = venueCaps.map(() => Array(slotsPerDay).fill(0).map((_, i) => venueCaps[i] || venueCaps[0]));
+      // Wait, venueCaps is [v1_courts, v2_courts, ...]. We need [v1_courts] * slotsPerDay.
+      const vRem = venueCaps.map((cap) => Array(slotsPerDay).fill(cap));
+
+      return canPack(0, vRem);
     }
 
     function addGame(a: string, b: string, bucket: number) {

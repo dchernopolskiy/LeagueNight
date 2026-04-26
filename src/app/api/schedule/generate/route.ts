@@ -1,7 +1,11 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getProfile } from "@/lib/supabase/helpers";
-import { fillScheduleByWeek, schedulePreflight } from "@/lib/scheduling/week-fill";
-import { localToUTCISO, parseLocalDate } from "@/lib/scheduling/date-utils";
+import {
+  fillScheduleByWeek,
+  schedulePreflight,
+  buildGameDays,
+} from "@/lib/scheduling/week-fill";
+import { formatYMD, localToUTCISO, parseLocalDate } from "@/lib/scheduling/date-utils";
 import { computeReseedPools, type ReseedMode } from "@/lib/scheduling/reseed";
 import {
   assignGamesToLocationCourtSlots,
@@ -311,6 +315,30 @@ export async function POST(request: NextRequest) {
   const effectiveCrossPlayRules = reseedCrossPlayOverride ?? crossPlayRules ?? [];
   const effectiveMixDivisions = reseedMode ? false : mixDivisions;
 
+  // Map of date -> Array of available venues and their court counts
+  const venueCapacitiesByDate = new Map<string, Array<{ id: string; courtCount: number }>>();
+  const gameDays = buildGameDays({
+    ...patternObj,
+    startsOn,
+    endsOn,
+    skipDates: mergedSkipDates,
+  });
+
+  for (const day of gameDays) {
+    const dStr = formatYMD(day);
+    const unavail = unavailByDate.get(dStr) || new Set<string>();
+    const available = locationsData
+      .filter((loc) => !unavail.has(loc.id))
+      .map((loc) => ({ id: loc.id, courtCount: loc.court_count }));
+    
+    if (available.length > 0) {
+      venueCapacitiesByDate.set(dStr, available);
+    } else if (locationsData.length === 0) {
+      // Fallback for when no locations are specified (use pattern.court_count)
+      venueCapacitiesByDate.set(dStr, [{ id: "default", courtCount: pattern.court_count || 1 }]);
+    }
+  }
+
   // Preflight check: if truncation needed but not accepted, return 409 with details.
   const preflight = schedulePreflight(
     weekFillTeams,
@@ -361,8 +389,10 @@ export async function POST(request: NextRequest) {
       maxCourtsPerVenue: maxCourts,
       },
       teamsMap,
+      venueCapacitiesByDate,
 
-    regenerateFromDate,
+      regenerateFromDate,
+
     existingMatchupCounts,
     teamWeights: reseedTeamWeights || undefined,
   };

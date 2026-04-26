@@ -166,7 +166,8 @@ function assignDateGames(
       // Prefer a location that fits cleanly; penalize overflow heavily but
       // don't disqualify — splitting a component across venues is the worst
       // outcome, because it ruins per-team venue consistency within a night.
-      if (!fits) score -= 10_000 * overflow;
+      if (!fits) score -= 100000 * overflow;
+
 
       if (fits && !bestFits) {
         // First location that fits wins against any overflow candidate.
